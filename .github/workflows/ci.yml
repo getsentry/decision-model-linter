@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'release/*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Type check, test, and pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      # Before `npm pack`, which drops the bin entry if dist/cli.js does not exist yet.
+      - run: npm run build
+
+      - run: npm pack
+
+      # Craft publishes this tarball to npm when a release is approved.
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: npm-package
+          path: '*.tgz'

@@ -1,5 +1,5 @@
-// What Jev is shown of a changed file: the changed lines and the bracketed expression each one
-// sits inside, never the blocks around it. Jev answers about everything it is shown, so other
+// What the model is shown of a changed file: the changed lines and the bracketed expression each one
+// sits inside, never the blocks around it. The model answers about everything it is shown, so other
 // unchanged code could put an existing problem into the answer.
 
 // Longer expressions (a whole urlpatterns list) show only the lines that open them.
