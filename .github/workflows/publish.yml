@@ -36,6 +36,9 @@ jobs:
 
       - run: npm test
 
+      # Before `npm publish`, which drops the bin entry if dist/cli.js does not exist yet.
+      - run: npm run build
+
       - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

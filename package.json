@@ -1,6 +1,6 @@
 {
   "name": "@getsentry/decision-model-linter",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "description": "Lint files with rules a decision model answers",
   "license": "FSL-1.1-ALv2",
   "repository": {
@@ -15,7 +15,7 @@
     }
   },
   "bin": {
-    "decision-model-linter": "./dist/cli.js"
+    "decision-model-linter": "dist/cli.js"
   },
   "files": [
     "dist",
