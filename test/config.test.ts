@@ -129,7 +129,7 @@ test("model errors name the setting, never the key", () => {
 test("a config file loads with the suites it imports", async () => {
   const dir = await tree({
     "lint/security.ts": `export default { files: ["src/**/*.py"], rules: { q: { prompt: "Q?", values: [{ value: "TRUE" }, { value: "FALSE" }] } } };\n`,
-    "lint/config.ts": `import type { Config } from "@getsentry/decision-model-linter";
+    "lint/config.ts": `import type { Config } from "@sentry/decision-model-linter";
 import security from "./security.ts";
 export default {
   model: { provider: "openrouter", name: "test-model", apiKey: process.env.NOT_SET_ANYWHERE, maxInputTokens: 32768 },

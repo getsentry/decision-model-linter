@@ -1,12 +1,10 @@
 {
-  "name": "@getsentry/decision-model-linter",
-  "version": "0.1.0-rc.2",
+  "name": "@sentry/decision-model-linter",
+  "version": "0.0.0",
   "description": "Lint files with rules a decision model answers",
+  "author": "Sentry",
   "license": "FSL-1.1-ALv2",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/getsentry/decision-model-linter.git"
-  },
+  "repository": "https://github.com/getsentry/decision-model-linter",
   "type": "module",
   "exports": {
     ".": {
@@ -24,9 +22,6 @@
   ],
   "engines": {
     "node": ">=24"
-  },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",

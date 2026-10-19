@@ -10,7 +10,7 @@ The config is TypeScript that Node runs directly. `import type` is erased at run
 
 ```ts
 // decision-model-linter.config.ts
-import type { Config, Model } from "@getsentry/decision-model-linter";
+import type { Config, Model } from "@sentry/decision-model-linter";
 import security from "./lint/security.ts";
 
 const jev = {
@@ -30,7 +30,7 @@ export default {
 
 ```ts
 // lint/security.ts
-import type { Suite } from "@getsentry/decision-model-linter";
+import type { Suite } from "@sentry/decision-model-linter";
 
 export default {
   files: ["src/**/*.py"],
@@ -73,9 +73,13 @@ A rule whose values are exactly `TRUE` and `FALSE` is asked as a yes/no question
 
 If the repository's `package.json` has no `"type": "module"`, keep the config in a folder whose own `package.json` says `{ "type": "module" }`.
 
-## In GitHub Actions
+## Install
 
-The package is published to GitHub Packages. Each repository that installs it needs read access, granted in the package's settings under "Manage Actions access".
+```sh
+npm install --save-dev @sentry/decision-model-linter
+```
+
+## In GitHub Actions
 
 ```yaml
 name: Decision model lint
@@ -91,7 +95,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
       pull-requests: write
     steps:
       # The pull request's merge commit and its first parent: HEAD^1..HEAD is what it changes.
@@ -102,17 +105,12 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '24'
-          registry-url: https://npm.pkg.github.com
-          scope: '@getsentry'
+      - run: npm ci
       - name: Lint
         env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
           OPENROUTER_API_KEY: ${{ secrets.YOUR_OPENROUTER_KEY }}
-        run: >-
-          npx --yes @getsentry/decision-model-linter@0.1.0
-          --config decision-model-linter.config.ts
-          --base HEAD^1 --format github --pr-comment
+        run: npx decision-model-linter --base HEAD^1 --format github --pr-comment
 ```
 
 On a pull request, this:
@@ -121,18 +119,14 @@ On a pull request, this:
 - keeps one pull request comment up to date;
 - reports each run's calls, tokens, cost, and model.
 
-The config and its suites come from the pull request's own commit, and the version is pinned in the workflow. A pull request that adds or changes a rule is linted by it.
+The config, its suites, and the package version in the lockfile all come from the pull request's own commit, so a pull request that adds or changes a rule is linted by it.
 
-To try a rule on existing code, pass paths instead of `--base`, for example in a `workflow_dispatch` run: `--suite security -- 'src/**/*.py'` lints every matching file whole.
+To try a rule on existing code, pass paths instead of `--base`: `npx decision-model-linter --suite security -- 'src/**/*.py'` lints every matching file whole.
 
 ## Locally
 
-Installing from GitHub Packages needs a token with `read:packages`, for example from `gh auth refresh -s read:packages`:
-
 ```sh
-npm config set @getsentry:registry https://npm.pkg.github.com
-npm config set //npm.pkg.github.com/:_authToken "$(gh auth token)"
-OPENROUTER_API_KEY=... npx @getsentry/decision-model-linter@0.1.0 --config decision-model-linter.config.ts -- src/
+OPENROUTER_API_KEY=... npx decision-model-linter -- src/
 ```
 
 | Flag | Meaning |
@@ -157,7 +151,7 @@ npm test
 npm run build
 ```
 
-The package ships compiled JavaScript, because Node does not run TypeScript from `node_modules`. To release, bump `version` in `package.json`, merge, and push a `v<version>` tag; the Publish workflow publishes it.
+The package ships compiled JavaScript, because Node does not run TypeScript from `node_modules`. To release, run the Release workflow with a version; craft prepares the release and publishes the tarball that CI built once the release is approved in `getsentry/publish`.
 
 ## License
 

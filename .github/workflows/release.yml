@@ -1,0 +1,25 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release (semver, "auto", "major", "minor", "patch")
+        default: minor
+        required: false
+      force:
+        description: Force release
+        default: false
+        type: boolean
+      merge_target:
+        description: Merge target branch
+        required: false
+
+jobs:
+  release:
+    uses: getsentry/craft/.github/workflows/release.yml@v2
+    with:
+      version: ${{ inputs.version }}
+      force: ${{ inputs.force }}
+      merge_target: ${{ inputs.merge_target }}
+    secrets: inherit

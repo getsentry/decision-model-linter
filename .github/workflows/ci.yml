@@ -1,16 +1,16 @@
-name: Test
+name: CI
 
 on:
-  pull_request:
   push:
-    branches: [main]
+    branches: [main, 'release/*']
+  pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    name: Type check, unit tests, and build
+  build:
+    name: Type check, test, and pack
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -28,4 +28,13 @@ jobs:
 
       - run: npm test
 
+      # Before `npm pack`, which drops the bin entry if dist/cli.js does not exist yet.
       - run: npm run build
+
+      - run: npm pack
+
+      # Craft publishes this tarball to npm when a release is approved.
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: npm-package
+          path: '*.tgz'
