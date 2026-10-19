@@ -150,3 +150,22 @@ test("--base skips unchanged files, marks new lines, and lints files moved into 
   assert.match(byPath["entered.py"], /^1\te_line_0 = 0$/m);
   assert.doesNotMatch(byPath["entered.py"], /\(new\)/);
 });
+
+test("--base without paths lints the files changed since the merge base", async () => {
+  const cwd = await repo();
+  await writeFile(join(cwd, "decision-model-linter.config.ts"), configSource(`[{ value: "TRUE", report: "r" }, { value: "FALSE" }]`));
+  const client = new FakeModel(() => ({ type: "yesno", yes: 0.1 }));
+  const code = await main(["--base", "main", "--format", "json"], { cwd, env: {}, write: () => {}, connect: () => client });
+  assert.equal(code, 0);
+  assert.deepEqual(client.calls.map((c) => c.state.path).sort(), ["entered.py", "modified.py", "moved_to.py", "new.py"]);
+});
+
+test("--base without paths and with no changes makes no calls", async () => {
+  const cwd = await repo();
+  execFileSync("git", ["switch", "-q", "main"], { cwd });
+  await writeFile(join(cwd, "decision-model-linter.config.ts"), configSource());
+  const client = new FakeModel();
+  const code = await main(["--base", "main"], { cwd, env: {}, write: () => {}, connect: () => client });
+  assert.equal(code, 0);
+  assert.equal(client.calls.length, 0);
+});

@@ -6,14 +6,15 @@ import { parseArgs } from "node:util";
 import { type Model, ConfigError, DEFAULT_CONFIG, loadConfig } from "./config.ts";
 import { isLinted, lint } from "./evaluate.ts";
 import { resolveTargets } from "./files.ts";
-import { changesSince } from "./git.ts";
+import { changedFiles, changesSince } from "./git.ts";
 import { githubComments, upsertComment } from "./github.ts";
 import type { DecisionModel } from "./models.ts";
 import { connect } from "./providers.ts";
 import { type Format, cleanComment, exitCode, format, prComment, summary } from "./report.ts";
 
 const USAGE =
-  "Usage: decision-model-linter [--config <path>] [--suite <name>]... [--base <ref>] [--format stylish|json|github] [--pr-comment] [--] [paths, directories, or globs...]";
+  "Usage: decision-model-linter [--config <path>] [--suite <name>]... [--base <ref>] [--format stylish|json|github] [--pr-comment] [--] [paths, directories, or globs...]\n" +
+  "With --base and no paths, lints the files changed since the merge base with <ref>.";
 
 export interface CliDeps {
   cwd: string;
@@ -70,7 +71,19 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
     return 2;
   }
 
-  const targets = args.positionals.length ? args.positionals : ["."];
+  // With --base and no paths, the files changed since the merge base; with neither, everything.
+  let targets = args.positionals;
+  if (!targets.length && args.values.base) {
+    try {
+      targets = await changedFiles(deps.cwd, args.values.base);
+    } catch (error) {
+      deps.write(`decision-model-linter: cannot diff against ${args.values.base}: ${(error as Error).message}\n`);
+      return 2;
+    }
+    if (!targets.length) return 0;
+  } else if (!targets.length) {
+    targets = ["."];
+  }
   let paths = (await resolveTargets(targets, deps.cwd)).filter((path) => isLinted(rules, path));
 
   // With --base, unchanged files are skipped and modified files are linted on their new lines only.

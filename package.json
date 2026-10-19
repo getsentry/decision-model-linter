@@ -1,20 +1,36 @@
 {
-  "name": "@sentry/decision-model-linter",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@getsentry/decision-model-linter",
+  "version": "0.1.0-rc.1",
   "description": "Lint files with rules a decision model answers",
   "license": "FSL-1.1-ALv2",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/getsentry/decision-model-linter.git"
+  },
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "bin": {
-    "decision-model-linter": "./src/cli.ts"
+    "decision-model-linter": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "engines": {
     "node": ">=24"
   },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "test": "node --test 'test/*.test.ts'",
     "typecheck": "tsc -p ."
   },

@@ -10,7 +10,7 @@ The config is TypeScript that Node runs directly. `import type` is erased at run
 
 ```ts
 // decision-model-linter.config.ts
-import type { Config, Model } from "@sentry/decision-model-linter";
+import type { Config, Model } from "@getsentry/decision-model-linter";
 import security from "./lint/security.ts";
 
 const jev = {
@@ -30,7 +30,7 @@ export default {
 
 ```ts
 // lint/security.ts
-import type { Suite } from "@sentry/decision-model-linter";
+import type { Suite } from "@getsentry/decision-model-linter";
 
 export default {
   files: ["src/**/*.py"],
@@ -75,6 +75,8 @@ If the repository's `package.json` has no `"type": "module"`, keep the config in
 
 ## In GitHub Actions
 
+The package is published to GitHub Packages. Each repository that installs it needs read access, granted in the package's settings under "Manage Actions access".
+
 ```yaml
 name: Decision model lint
 
@@ -89,39 +91,55 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read
       pull-requests: write
     steps:
+      # The pull request's merge commit and its first parent: HEAD^1..HEAD is what it changes.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 2
-      - uses: getsentry/decision-model-linter@<sha>
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          config: decision-model-linter.config.ts
+          node-version: '24'
+          registry-url: https://npm.pkg.github.com
+          scope: '@getsentry'
+      - name: Lint
         env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           OPENROUTER_API_KEY: ${{ secrets.YOUR_OPENROUTER_KEY }}
+        run: >-
+          npx --yes @getsentry/decision-model-linter@0.1.0
+          --config decision-model-linter.config.ts
+          --base HEAD^1 --format github --pr-comment
 ```
 
-On a pull request, the action:
+On a pull request, this:
 - lints the lines the pull request's merge commit changes relative to its first parent;
 - annotates findings;
 - keeps one pull request comment up to date;
 - reports each run's calls, tokens, cost, and model.
 
-The config, its suites, and the action version all come from the pull request's own commit, so a pull request that adds or changes a rule is linted by it.
+The config and its suites come from the pull request's own commit, and the version is pinned in the workflow. A pull request that adds or changes a rule is linted by it.
 
-The `paths` input lints paths, directories, or globs whole, one per line. It works on any event, such as `workflow_dispatch`, which is how to try a new rule on existing code. The `suites` input limits a run to some suites, one per line.
+To try a rule on existing code, pass paths instead of `--base`, for example in a `workflow_dispatch` run: `--suite security -- 'src/**/*.py'` lints every matching file whole.
 
 ## Locally
 
+Installing from GitHub Packages needs a token with `read:packages`, for example from `gh auth refresh -s read:packages`:
+
 ```sh
-OPENROUTER_API_KEY=... node path/to/decision-model-linter/src/cli.ts --config decision-model-linter.config.ts -- src/
+npm config set @getsentry:registry https://npm.pkg.github.com
+npm config set //npm.pkg.github.com/:_authToken "$(gh auth token)"
+OPENROUTER_API_KEY=... npx @getsentry/decision-model-linter@0.1.0 --config decision-model-linter.config.ts -- src/
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--config <path>` | Config file. Default `decision-model-linter.config.ts`. |
 | `--suite <name>` | Run only this suite; repeatable. |
-| `--base <ref>` | Lint only the lines changed since the merge base with `<ref>`. |
+| `--base <ref>` | Lint only the lines changed since the merge base with `<ref>`; without paths, the files changed since then. |
 | `--format stylish\|json\|github` | Output format. Default `stylish`. |
 | `--pr-comment` | Keep the pull request comment up to date (in GitHub Actions). |
 
@@ -136,7 +154,10 @@ Exit codes:
 npm ci
 npm run typecheck
 npm test
+npm run build
 ```
+
+The package ships compiled JavaScript, because Node does not run TypeScript from `node_modules`. To release, bump `version` in `package.json`, merge, and push a `v<version>` tag; the Publish workflow publishes it.
 
 ## License
 

@@ -45,6 +45,13 @@ export async function changesSince(cwd: string, base: string, paths: readonly st
   return changes;
 }
 
+/** Files added, copied, modified, or renamed since the merge base with `base`, including uncommitted edits. */
+export async function changedFiles(cwd: string, base: string): Promise<string[]> {
+  const mergeBase = (await git(cwd, ["merge-base", base, "HEAD"])).trim();
+  const names = await git(cwd, ["diff", "--name-only", "--diff-filter=ACMR", "--find-renames", "-z", mergeBase]);
+  return names.split("\0").filter(Boolean);
+}
+
 /** Line numbers, in the new version of the file, of the lines a unified diff adds or changes. */
 export function newLineNumbers(diff: string): Set<number> {
   const added = new Set<number>();
