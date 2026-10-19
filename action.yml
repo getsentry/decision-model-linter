@@ -1,0 +1,74 @@
+name: Decision model linter
+description: Lint a pull request's changed lines, or given paths, with rules a decision model answers.
+author: Functional Software, Inc.
+
+# The calling step sets the environment variable its config reads the key from; this action takes
+# no key. The config, its suites, and this action's version all come from the checked-out commit.
+inputs:
+  config:
+    description: Path to the config file, relative to the repository root.
+    required: false
+    default: decision-model-linter.config.ts
+  suites:
+    description: Suites to run, one per line. All suites when empty.
+    required: false
+    default: ''
+  paths:
+    description: >-
+      Paths, directories, or globs to lint whole, one per line. When empty on a pull request, the
+      lines the pull request changes are linted.
+    required: false
+    default: ''
+  github-token:
+    description: Token for the pull request comment.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      with:
+        node-version: '24'
+
+    - name: Lint
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_SUITES: ${{ inputs.suites }}
+        INPUT_PATHS: ${{ inputs.paths }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        args=(--config "$INPUT_CONFIG" --format github)
+        while read -r suite; do
+          if [ -n "$suite" ]; then args+=(--suite "$suite"); fi
+        done <<< "$INPUT_SUITES"
+
+        if [ -n "$INPUT_PATHS" ]; then
+          paths=()
+          while read -r path; do
+            if [ -n "$path" ]; then paths+=("$path"); fi
+          done <<< "$INPUT_PATHS"
+          # `--` keeps a path named like an option from being read as one.
+          exec node "$ACTION_PATH/src/cli.ts" "${args[@]}" -- "${paths[@]}"
+        fi
+
+        if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+          echo "::error title=decision-model-linter::Set the paths input to lint outside a pull_request event."
+          exit 2
+        fi
+        # The PR's merge commit and its first parent: HEAD^1..HEAD is exactly what the PR changes.
+        if ! git rev-parse -q --verify 'HEAD^1' > /dev/null; then
+          git fetch -q --no-tags --depth=2 origin "$GITHUB_SHA"
+        fi
+        files=()
+        while IFS= read -r file; do
+          files+=("$file")
+        done < <(git diff --name-only --diff-filter=ACMR 'HEAD^1' HEAD)
+        if [ "${#files[@]}" -eq 0 ]; then
+          echo "No changed files to lint."
+          exit 0
+        fi
+        exec node "$ACTION_PATH/src/cli.ts" "${args[@]}" --base 'HEAD^1' --pr-comment -- "${files[@]}"
