@@ -1,6 +1,6 @@
 {
   "name": "@sentry/decision-model-linter",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Lint files with rules a decision model answers",
   "author": "Sentry",
   "license": "FSL-1.1-ALv2",
