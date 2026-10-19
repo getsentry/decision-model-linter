@@ -1,3 +1,4 @@
+import type { Severity } from "./config.ts";
 import type { CallResult, Finding } from "./evaluate.ts";
 
 export const COMMENT_MARKER = "<!-- decision-model-linter -->";
@@ -9,9 +10,9 @@ export interface Usage {
   files: number;
   inputTokens: number;
   outputTokens: number;
-  /** USD, as OpenRouter reports it per call. */
+  /** USD, as the provider reports it per call. */
   cost: number;
-  /** Calls whose cost OpenRouter did not report, so `cost` undercounts. */
+  /** Calls whose cost the provider did not report, so `cost` undercounts. */
   unpriced: number;
   /** Every model version that answered, so a change behind an alias shows up. */
   models: string[];
@@ -52,82 +53,83 @@ export function format(results: readonly CallResult[], kind: Format): string {
   return stylish(results);
 }
 
-/** Findings grouped by file, eslint-style, ending with the totals and the run's usage. */
+/** Findings and unchecked files grouped by file, eslint-style, ending with the totals and usage. */
 function stylish(results: readonly CallResult[]): string {
-  const byPath = groupByPath(results);
   const lines: string[] = [];
-  let errors = 0;
-  let warnings = 0;
-  for (const [path, calls] of byPath) {
+  const counts: Record<Severity, number> = { error: 0, warn: 0 };
+  for (const [path, calls] of groupByPath(results)) {
     const problems = calls.flatMap((call) => [
       ...call.findings.map((f) => {
-        if (f.severity === "error") errors++;
-        else warnings++;
-        return `  ${f.severity.padEnd(5)}  ${f.suite}/${f.field} = ${f.value} (${f.probability.toFixed(2)})  ${oneLine(f.message)}`;
+        counts[f.severity]++;
+        return `  ${f.severity.padEnd(5)}  ${f.suite}/${f.rule} = ${f.value} (${f.probability.toFixed(2)})  ${oneLine(f.message)}`;
       }),
-      ...(gap(call) ? [`  ${"warn".padEnd(5)}  ${call.suite}: ${gap(call)}`] : []),
+      ...(call.unchecked ? [`  ${call.unchecked.padEnd(5)}  ${call.suite}: ${gap(call)}`] : []),
     ]);
-    warnings += calls.filter(gap).length;
+    for (const call of calls) if (call.unchecked) counts[call.unchecked]++;
     if (problems.length) lines.push(path, ...problems, "");
   }
-  const total = errors + warnings;
+  const total = counts.error + counts.warn;
   if (total > 0) {
-    lines.push(`✖ ${total} ${total === 1 ? "problem" : "problems"} (${plural(errors, "error")}, ${plural(warnings, "warning")})`);
+    lines.push(
+      `✖ ${total} ${total === 1 ? "problem" : "problems"} (${plural(counts.error, "error")}, ${plural(counts.warn, "warning")})`,
+    );
   }
   lines.push(`decision-model-linter: ${describeUsage(usage(results))}`);
   return `${lines.join("\n")}\n`;
 }
 
-/** One GitHub workflow command per finding, plus a notice with the run's usage. */
+/** One GitHub workflow command per finding and unchecked file, plus a notice with the run's usage. */
 function github(results: readonly CallResult[]): string {
+  const command = (severity: Severity) => (severity === "error" ? "error" : "warning");
   const lines = results.flatMap((call) => [
     ...call.findings.map(
       (f) =>
-        `::${f.severity === "error" ? "error" : "warning"} file=${property(f.path)},title=${property(`decision-model-linter ${f.suite}/${f.field}`)}::${data(f.message)}`,
+        `::${command(f.severity)} file=${property(f.path)},title=${property(`decision-model-linter ${f.suite}/${f.rule}`)}::${data(f.message)}`,
     ),
-    ...(gap(call) ? [`::warning file=${property(call.path)},title=${property(`decision-model-linter ${call.suite}`)}::${data(gap(call)!)}`] : []),
+    ...(call.unchecked
+      ? [`::${command(call.unchecked)} file=${property(call.path)},title=${property(`decision-model-linter ${call.suite}`)}::${data(gap(call))}`]
+      : []),
   ]);
   lines.push(`::notice title=${property("decision-model-linter usage")}::${data(describeUsage(usage(results)))}`);
   return `${lines.join("\n")}\n`;
 }
 
-/** The PR comment: a section per suite with findings by file, then any files not checked; null if clean. */
+/** The PR comment: a section per suite with findings by file, then any unchecked files; null if clean. */
 export function prComment(results: readonly CallResult[]): string | null {
   const bySuite = new Map<string, Finding[]>();
   for (const call of results) {
     if (call.findings.length) bySuite.set(call.suite, [...(bySuite.get(call.suite) ?? []), ...call.findings]);
   }
-  const partial = results.filter(gap);
-  if (!bySuite.size && !partial.length) return null;
+  const unchecked = results.filter((call) => call.unchecked);
+  if (!bySuite.size && !unchecked.length) return null;
   const sections = [...bySuite.keys()].sort().map((suite) => {
     const byPath = new Map<string, Finding[]>();
     for (const f of bySuite.get(suite)!) byPath.set(f.path, [...(byPath.get(f.path) ?? []), f]);
     const files = [...byPath.keys()].sort().map((path) => {
       const items = byPath
         .get(path)!
-        .map((f) => `- **${f.severity}** \`${f.field} = ${f.value}\` (${f.probability.toFixed(2)}): ${f.message.trim()}`);
+        .map((f) => `- **${f.severity}** \`${f.rule} = ${f.value}\` (${f.probability.toFixed(2)}): ${f.message.trim()}`);
       return `**\`${path}\`**\n\n${items.join("\n")}`;
     });
     return `### ${suite}\n\n${files.join("\n\n")}`;
   });
-  if (partial.length) sections.push(notFullyChecked(partial));
+  if (unchecked.length) sections.push(notFullyChecked(unchecked));
   return `${COMMENT_MARKER}\n## decision-model-linter\n\n${sections.join("\n\n")}\n\n${footer(results)}`;
 }
 
-/** The comment section for files Jev did not see in full, so a partial run never reads as clean. */
-function notFullyChecked(partial: readonly CallResult[]): string {
-  const items = partial.map((call) => `- \`${call.path}\` (${call.suite}): ${gap(call)}`);
+/** The comment section for files the model did not see in full, so a partial run never reads as clean. */
+function notFullyChecked(unchecked: readonly CallResult[]): string {
+  const items = unchecked.map((call) => `- **${call.unchecked}** \`${call.path}\` (${call.suite}): ${gap(call)}`);
   return `### Not fully checked\n\nFindings may be missing for these files:\n\n${items.join("\n")}`;
 }
 
-/** Why a call did not check its whole file or change, or undefined if it did. */
-function gap(call: CallResult): string | undefined {
+/** Why a call did not check its whole file or change. */
+function gap(call: CallResult): string {
   if (call.error) return `not checked: ${oneLine(call.error).slice(0, 200)}`;
-  if (call.truncated) return "too large for one call, so the end was not checked";
-  return undefined;
+  return "too large for one call, so the end was not checked";
 }
 
-/** The PR comment for a run with no findings. */
+/** The PR comment for a run with no findings and no unchecked files. */
 export function cleanComment(results: readonly CallResult[]): string {
   return `${COMMENT_MARKER}\n## decision-model-linter\n\nNo findings on the latest commit.\n\n${footer(results)}`;
 }
@@ -156,16 +158,17 @@ function footer(results: readonly CallResult[]): string {
   return `<sub>decision-model-linter on this commit: ${describeUsage(usage(results))}</sub>\n`;
 }
 
-/** 1 if any finding is an error, else 0. Failed calls are reported, not fatal, so an outage cannot block PRs. */
+/** 1 if any finding or unchecked file is at `error`, else 0. */
 export function exitCode(results: readonly CallResult[]): number {
-  return results.some((call) => call.findings.some((f) => f.severity === "error")) ? 1 : 0;
+  const failed = results.some((call) => call.unchecked === "error" || call.findings.some((f) => f.severity === "error"));
+  return failed ? 1 : 0;
 }
 
-/** Results grouped by file, sorted by file, suite, and entry. */
+/** Results grouped by file, sorted by file, suite, and first rule. */
 function groupByPath(results: readonly CallResult[]): Map<string, CallResult[]> {
   const byPath = new Map<string, CallResult[]>();
   for (const call of [...results].sort(
-    (a, b) => a.path.localeCompare(b.path) || a.suite.localeCompare(b.suite) || a.entry - b.entry,
+    (a, b) => a.path.localeCompare(b.path) || a.suite.localeCompare(b.suite) || a.rules[0].localeCompare(b.rules[0]),
   )) {
     byPath.set(call.path, [...(byPath.get(call.path) ?? []), call]);
   }

@@ -8,7 +8,7 @@ export interface CommentApi {
   updateComment(id: number, body: string): Promise<void>;
 }
 
-/** The comment calls decision-model-linter makes, against the GitHub REST API. */
+/** The comment calls the linter makes, against the GitHub REST API. */
 export function githubComments(token: string, repo: string, api = "https://api.github.com"): CommentApi {
   async function request(method: string, path: string, body?: unknown): Promise<any> {
     const response = await fetch(`${api}${path}`, {

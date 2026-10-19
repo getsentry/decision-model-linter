@@ -6,23 +6,17 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { main } from "../src/cli.ts";
-import type { Entry } from "../src/suites.ts";
 import { collapseHiddenLines, linesToShow } from "../src/changed-lines.ts";
 import { NEW_LINES_INSTRUCTIONS, WHOLE_FILE_INSTRUCTIONS, annotate, lint } from "../src/evaluate.ts";
 import { changesSince, newLineNumbers } from "../src/git.ts";
-import type { Decision, JevClient, Question, State } from "../src/jev.ts";
+import { FakeModel, configSource, rule } from "./helpers.ts";
 
-class RecordingJev implements JevClient {
-  calls: { state: State; questions: Record<string, Question> }[] = [];
-
-  async decide(state: State, questions: Record<string, Question>): Promise<Decision> {
-    this.calls.push({ state, questions });
-    const answers = Object.fromEntries(Object.keys(questions).map((id) => [id, { type: "noul" as const, noul: 0.9 }]));
-    return { answers, durationMs: 1 };
-  }
-}
-
-const field = { prompt: "Swallows exceptions?", values: [{ value: "TRUE", report: "Don't." }, { value: "FALSE" }] };
+const swallows = rule("swallows", {
+  suite: "security",
+  files: ["*.py"],
+  prompt: "Swallows exceptions?",
+  values: [{ value: "TRUE", report: "Don't." }, { value: "FALSE" }],
+});
 
 async function repo(): Promise<string> {
   const cwd = await mkdtemp(join(tmpdir(), "decision-model-linter-"));
@@ -79,11 +73,10 @@ test("changed lines count as new", () => {
 
 test("a changed file shows only its new lines, with the new-lines instructions", async () => {
   const cwd = await repo();
-  const client = new RecordingJev();
-  const config: Entry[] = [{ files: ["*.py"], fields: { swallows: field } }];
-  const [changed, whole] = await lint([{ name: "security", entries: config }], ["modified.py", "new.py"], {
+  const client = new FakeModel(() => ({ type: "yesno", yes: 0.9 }));
+  const [changed, whole] = await lint([swallows], ["modified.py", "new.py"], {
     cwd,
-    client,
+    connect: () => client,
     newLines: new Map([["modified.py", new Set([4, 5])]]),
   });
   assert.equal(changed.mode, "changeset");
@@ -141,15 +134,11 @@ test("a long expression shows only the line that opens it", () => {
   assert.deepEqual([...linesToShow(text, new Set([20]), "x.py")].sort((a, b) => a - b), [1, 20]);
 });
 
-test("--base skips unchanged files, marks new lines, and lints files moved into scope whole", async () => {
+test("--base skips unchanged files, marks new lines, and lints files moved into a rule's scope whole", async () => {
   const cwd = await repo();
-  await mkdir(join(cwd, "decision-model-linter"));
-  await writeFile(
-    join(cwd, "decision-model-linter", "conventions.mts"),
-    `export default [{ files: ["*.py"], fields: { swallows: { prompt: "Q?", values: [{ value: "TRUE", report: "r" }, { value: "FALSE" }] } } }];\n`,
-  );
-  const client = new RecordingJev();
-  const code = await main(["--base", "main", "--format", "json", "."], { cwd, env: {}, write: () => {}, client });
+  await writeFile(join(cwd, "decision-model-linter.config.ts"), configSource(`[{ value: "TRUE", report: "r" }, { value: "FALSE" }]`));
+  const client = new FakeModel(() => ({ type: "yesno", yes: 0.9 }));
+  const code = await main(["--base", "main", "--format", "json", "."], { cwd, env: {}, write: () => {}, connect: () => client });
   assert.equal(code, 0);
   const byPath = Object.fromEntries(client.calls.map((c) => [c.state.path, c.state.content]));
   assert.deepEqual(Object.keys(byPath).sort(), ["entered.py", "modified.py", "moved_to.py", "new.py"]);
@@ -157,7 +146,7 @@ test("--base skips unchanged files, marks new lines, and lints files moved into 
   assert.doesNotMatch(byPath["modified.py"], /^1\ta = 1$/m);
   assert.equal(byPath["moved_to.py"].match(/\(new\)/g)?.length, 1);
   assert.doesNotMatch(byPath["new.py"], /\(new\)/);
-  // Moved from sub/, which "*.py" does not cover, so it is new to this suite.
+  // Moved from sub/, which "*.py" does not cover, so it is new to this rule.
   assert.match(byPath["entered.py"], /^1\te_line_0 = 0$/m);
   assert.doesNotMatch(byPath["entered.py"], /\(new\)/);
 });

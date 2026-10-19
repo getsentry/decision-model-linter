@@ -1,11 +1,3 @@
-export {
-  type ContextValue,
-  type Entry,
-  type Field,
-  type Severity,
-  type Suite,
-  type Value,
-  defineSuite,
-} from "./suites.ts";
-export { type CallResult, type Finding, lint } from "./evaluate.ts";
-export { type JevClient, openRouterJev } from "./jev.ts";
+// Types for a config file: `import type { Config } from "@sentry/decision-model-linter"` is erased
+// when Node runs the config, so a repository needs no install to use them.
+export type { Config, ContextValue, Model, Rule, Settings, Severity, Suite, Value } from "./config.ts";
