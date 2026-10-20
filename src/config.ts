@@ -55,9 +55,11 @@ export interface Suite extends Settings {
   rules: Record<string, Rule>;
 }
 
-/** A repository's config: its suites, defaults for their rules, and how many calls run at once. */
+/** A repository's config: its suites, defaults for their rules, and how a run is carried out. */
 export interface Config extends Settings {
   concurrency?: number;
+  /** A pull request label with which a failing run passes; the PR comment explains it on failure. */
+  overrideLabel?: string;
   suites: Record<string, Suite>;
 }
 
@@ -90,11 +92,15 @@ const VALUE_KEYS = ["value", "description", "report", "severity", "threshold"];
 /** A config that cannot be loaded or is not valid. */
 export class ConfigError extends Error {}
 
+/** What a run needs from a config: its rules, resolved, and its run settings. */
+export interface LoadedConfig {
+  rules: ResolvedRule[];
+  concurrency: number;
+  overrideLabel?: string;
+}
+
 /** Loads the config file at `path` and returns its rules, resolved, from the suites in `only` (or all). */
-export async function loadConfig(
-  path: string,
-  only: readonly string[] = [],
-): Promise<{ rules: ResolvedRule[]; concurrency: number }> {
+export async function loadConfig(path: string, only: readonly string[] = []): Promise<LoadedConfig> {
   let module;
   try {
     module = await import(pathToFileURL(resolve(path)).href);
@@ -106,13 +112,17 @@ export async function loadConfig(
 }
 
 /** Checks a config's default export and resolves every rule's settings. */
-export function resolveConfig(raw: unknown, only: readonly string[] = []): { rules: ResolvedRule[]; concurrency: number } {
+export function resolveConfig(raw: unknown, only: readonly string[] = []): LoadedConfig {
   if (!isObject(raw)) throw new ConfigError("config: must default-export an object");
-  checkKeys(raw, "config", [...SETTING_KEYS, "concurrency", "suites"]);
+  checkKeys(raw, "config", [...SETTING_KEYS, "concurrency", "overrideLabel", "suites"]);
   checkSettings(raw, "config");
   const { concurrency = DEFAULT_CONCURRENCY } = raw;
   if (!Number.isInteger(concurrency) || concurrency < 1) {
     throw new ConfigError("config.concurrency: must be a positive integer");
+  }
+  const { overrideLabel } = raw;
+  if (overrideLabel !== undefined && (typeof overrideLabel !== "string" || !overrideLabel.trim())) {
+    throw new ConfigError("config.overrideLabel: must be a non-empty string");
   }
   if (!isObject(raw.suites) || !Object.keys(raw.suites).length) {
     throw new ConfigError("config.suites: must name at least one suite");
@@ -134,7 +144,7 @@ export function resolveConfig(raw: unknown, only: readonly string[] = []): { rul
       if (!only.length || only.includes(suiteName)) rules.push(resolved);
     }
   }
-  return { rules, concurrency };
+  return { rules, concurrency, ...(overrideLabel === undefined ? {} : { overrideLabel }) };
 }
 
 /** Checks one rule and resolves its settings from the rule, then its suite, then the config. */

@@ -24,6 +24,7 @@ export default {
   model: jev,
   threshold: 0.7,
   unchecked: "warn",
+  overrideLabel: "Override decision model lint",
   suites: { security },
 } satisfies Config;
 ```
@@ -65,8 +66,9 @@ Rule settings can be set on the config, a suite, or a rule. The nearest level wi
 | `threshold` | The probability an answer must reach to be reported. Default 0.7. |
 | `unchecked` | `"warn"` or `"error"`: how a file is reported when a call fails or the file is cut to fit. Default `"warn"`. |
 
-Two settings belong elsewhere:
+Three settings belong elsewhere:
 - `concurrency`, the number of calls at once (default 16), is set on the config only.
+- `overrideLabel` is set on the config only. On a pull request with this label, a run with errors still reports them but passes. When a run fails, the PR comment explains that a person may add the label if they and a reviewer are confident an error is wrong, and that agents should never add it.
 - `severity` (`"warn"` or `"error"`, default `"warn"`) is set on each value, next to its `report`.
 
 A rule whose values are exactly `TRUE` and `FALSE` is asked as a yes/no question; any other rule is asked as a multiple-choice question. For each file, the rules of one suite that share a model and context are asked in one call. Overriding `model` or `context` on a rule gives it its own call, which sends the file again.
@@ -86,12 +88,21 @@ name: Decision model lint
 
 on:
   pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
 
 jobs:
   lint:
     # Pull requests from forks get no secrets. Never use pull_request_target, which would give a
-    # pull request's code the key; the linter refuses to run on it.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # pull request's code the key; the linter refuses to run on it. Of label events, only the
+    # config's overrideLabel re-runs the check.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+      github.event.label.name == 'Override decision model lint')
+    # Job-level, so a skipped run for another label does not cancel a real one.
+    concurrency:
+      group: decision-model-lint-${{ github.event.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
