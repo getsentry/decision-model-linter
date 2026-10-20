@@ -1,4 +1,14 @@
 # Changelog
+## 0.2.0
+
+### Breaking Changes 🛠
+
+- Leave pull requests to the calling workflow by @azulus in [#3](https://github.com/getsentry/decision-model-linter/pull/3)
+
+### New Features ✨
+
+- Explain and apply an override label when a run fails by @azulus in [#2](https://github.com/getsentry/decision-model-linter/pull/2)
+
 ## 0.1.0
 
 ### New Features ✨
