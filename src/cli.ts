@@ -10,7 +10,7 @@ import { changedFiles, changesSince } from "./git.ts";
 import { githubComments, upsertComment } from "./github.ts";
 import type { DecisionModel } from "./models.ts";
 import { connect } from "./providers.ts";
-import { type Format, cleanComment, exitCode, format, prComment, summary } from "./report.ts";
+import { type Format, type Override, cleanComment, exitCode, format, prComment, summary } from "./report.ts";
 
 const USAGE =
   "Usage: decision-model-linter [--config <path>] [--suite <name>]... [--base <ref>] [--format stylish|json|github] [--pr-comment] [--] [paths, directories, or globs...]\n" +
@@ -24,7 +24,10 @@ export interface CliDeps {
   connect?: (model: Model) => DecisionModel;
 }
 
-/** Runs the CLI with `argv`; returns 2 for a setup error, 1 for an error finding or unchecked file, else 0. */
+/**
+ * Runs the CLI with `argv`; returns 2 for a setup error, 1 for an error finding or unchecked file
+ * unless the pull request has the config's override label, else 0.
+ */
 export async function main(argv: string[], deps: CliDeps): Promise<number> {
   // The config is code, and it runs with the key in its environment.
   if (deps.env.GITHUB_EVENT_NAME === "pull_request_target") {
@@ -63,7 +66,7 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
     deps.write(`decision-model-linter config: ${error.message}\n`);
     return 2;
   }
-  const { rules, concurrency } = config;
+  const { rules, concurrency, overrideLabel } = config;
   const missingKeys = [...new Set(rules.filter((rule) => !rule.model.apiKey?.trim()).map((rule) => rule.modelAt))];
   if (missingKeys.length) {
     const settings = missingKeys.map((at) => `${at}.apiKey`).join(", ");
@@ -116,25 +119,29 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
     newLines,
     renamedFrom,
   });
-  deps.write(format(results, kind));
+  const pr = await pullRequest(deps.env);
+  const override: Override | undefined = overrideLabel
+    ? { label: overrideLabel, applied: pr?.labels.includes(overrideLabel) ?? false }
+    : undefined;
+  deps.write(format(results, kind, override));
   if (deps.env.GITHUB_STEP_SUMMARY) await appendFile(deps.env.GITHUB_STEP_SUMMARY, summary(results));
 
-  if (args.values["pr-comment"]) {
-    const pr = await pullRequestNumber(deps.env);
-    if (pr !== null) {
-      const api = githubComments(deps.env.GITHUB_TOKEN ?? "", deps.env.GITHUB_REPOSITORY ?? "");
-      const action = await upsertComment(api, pr, prComment(results), cleanComment(results));
-      deps.write(`decision-model-linter PR comment: ${action}\n`);
-    }
+  if (args.values["pr-comment"] && pr) {
+    const api = githubComments(deps.env.GITHUB_TOKEN ?? "", deps.env.GITHUB_REPOSITORY ?? "");
+    const action = await upsertComment(api, pr.number, prComment(results, override), cleanComment(results));
+    deps.write(`decision-model-linter PR comment: ${action}\n`);
   }
-  return exitCode(results);
+  const code = exitCode(results);
+  return code === 1 && override?.applied ? 0 : code;
 }
 
-/** The pull request number from the GitHub event, or null outside a pull request. */
-async function pullRequestNumber(env: NodeJS.ProcessEnv): Promise<number | null> {
+/** The pull request's number and labels from the GitHub event, or null outside a pull request. */
+async function pullRequest(env: NodeJS.ProcessEnv): Promise<{ number: number; labels: string[] } | null> {
   if (!env.GITHUB_EVENT_PATH) return null;
   const event = JSON.parse(await readFile(env.GITHUB_EVENT_PATH, "utf8"));
-  return event.pull_request?.number ?? null;
+  const pr = event.pull_request;
+  if (!pr) return null;
+  return { number: pr.number, labels: (pr.labels ?? []).map((label: { name: string }) => label.name) };
 }
 
 if (import.meta.main) {
