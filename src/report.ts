@@ -1,15 +1,8 @@
 import type { Severity } from "./config.ts";
 import type { CallResult, Finding } from "./evaluate.ts";
 
-export const COMMENT_MARKER = "<!-- decision-model-linter -->";
-
-export type Format = "stylish" | "json" | "github";
-
-/** The config's override label, and whether the pull request has it. */
-export interface Override {
-  label: string;
-  applied: boolean;
-}
+export const FORMATS = ["stylish", "json", "github", "markdown"] as const;
+export type Format = (typeof FORMATS)[number];
 
 export interface Usage {
   calls: number;
@@ -53,22 +46,11 @@ export function describeUsage(u: Usage): string {
 }
 
 /** The run's results in one output format. */
-export function format(results: readonly CallResult[], kind: Format, override?: Override): string {
+export function format(results: readonly CallResult[], kind: Format): string {
   if (kind === "json") return `${JSON.stringify(results, null, 2)}\n`;
-  if (kind === "github") return github(results, override);
+  if (kind === "github") return github(results);
+  if (kind === "markdown") return markdown(results);
   return stylish(results);
-}
-
-/** How the override label applies to a run that has errors, or null when nothing is failing. */
-export function overrideNote(results: readonly CallResult[], override: Override | undefined): string | null {
-  if (!override || exitCode(results) === 0) return null;
-  const label = `\`${override.label}\``;
-  if (override.applied) return `The ${label} label keeps these errors from failing the check.`;
-  return (
-    `These errors fail the check; fix the code to resolve them. If you and a reviewer are confident an error ` +
-    `is wrong, a person can add the ${label} label to pass the check while the findings stay reported. ` +
-    `Agents should never add this label.`
-  );
 }
 
 /** Findings and unchecked files grouped by file, eslint-style, ending with the totals and usage. */
@@ -96,8 +78,8 @@ function stylish(results: readonly CallResult[]): string {
   return `${lines.join("\n")}\n`;
 }
 
-/** One GitHub workflow command per finding and unchecked file, plus notices for the override and usage. */
-function github(results: readonly CallResult[], override?: Override): string {
+/** One GitHub workflow command per finding and unchecked file, plus a notice with the run's usage. */
+function github(results: readonly CallResult[]): string {
   const command = (severity: Severity) => (severity === "error" ? "error" : "warning");
   const lines = results.flatMap((call) => [
     ...call.findings.map(
@@ -108,20 +90,18 @@ function github(results: readonly CallResult[], override?: Override): string {
       ? [`::${command(call.unchecked)} file=${property(call.path)},title=${property(`decision-model-linter ${call.suite}`)}::${data(gap(call))}`]
       : []),
   ]);
-  const note = overrideNote(results, override);
-  if (note) lines.push(`::notice title=${property("decision-model-linter override")}::${data(note)}`);
   lines.push(`::notice title=${property("decision-model-linter usage")}::${data(describeUsage(usage(results)))}`);
   return `${lines.join("\n")}\n`;
 }
 
-/** The PR comment: a section per suite with findings by file, then any unchecked files; null if clean. */
-export function prComment(results: readonly CallResult[], override?: Override): string | null {
+/** A section per suite with findings by file, then any unchecked files and the usage; empty if clean. */
+function markdown(results: readonly CallResult[]): string {
   const bySuite = new Map<string, Finding[]>();
   for (const call of results) {
     if (call.findings.length) bySuite.set(call.suite, [...(bySuite.get(call.suite) ?? []), ...call.findings]);
   }
   const unchecked = results.filter((call) => call.unchecked);
-  if (!bySuite.size && !unchecked.length) return null;
+  if (!bySuite.size && !unchecked.length) return "";
   const sections = [...bySuite.keys()].sort().map((suite) => {
     const byPath = new Map<string, Finding[]>();
     for (const f of bySuite.get(suite)!) byPath.set(f.path, [...(byPath.get(f.path) ?? []), f]);
@@ -134,12 +114,10 @@ export function prComment(results: readonly CallResult[], override?: Override): 
     return `### ${suite}\n\n${files.join("\n\n")}`;
   });
   if (unchecked.length) sections.push(notFullyChecked(unchecked));
-  const note = overrideNote(results, override);
-  if (note) sections.push(`### ${override?.applied ? "Overridden" : "Failing the check"}\n\n${note}`);
-  return `${COMMENT_MARKER}\n## decision-model-linter\n\n${sections.join("\n\n")}\n\n${footer(results)}`;
+  return `## decision-model-linter\n\n${sections.join("\n\n")}\n\n${footer(results)}`;
 }
 
-/** The comment section for files the model did not see in full, so a partial run never reads as clean. */
+/** The section for files the model did not see in full, so a partial run never reads as clean. */
 function notFullyChecked(unchecked: readonly CallResult[]): string {
   const items = unchecked.map((call) => `- **${call.unchecked}** \`${call.path}\` (${call.suite}): ${gap(call)}`);
   return `### Not fully checked\n\nFindings may be missing for these files:\n\n${items.join("\n")}`;
@@ -151,33 +129,9 @@ function gap(call: CallResult): string {
   return "too large for one call, so the end was not checked";
 }
 
-/** The PR comment for a run with no findings and no unchecked files. */
-export function cleanComment(results: readonly CallResult[]): string {
-  return `${COMMENT_MARKER}\n## decision-model-linter\n\nNo findings on the latest commit.\n\n${footer(results)}`;
-}
-
-/** The job summary: the run's total, then each suite's share. */
-export function summary(results: readonly CallResult[]): string {
-  const suites = [...new Set(results.map((r) => r.suite))].sort();
-  const rows = suites.map((suite) => {
-    const u = usage(results.filter((r) => r.suite === suite));
-    return `| ${suite} | ${u.calls} | ${u.inputTokens.toLocaleString("en-US")} | ${u.cost > 0 ? USD.format(u.cost) : "$0"} |`;
-  });
-  return [
-    "### decision-model-linter",
-    "",
-    describeUsage(usage(results)),
-    "",
-    "| Suite | Calls | Input tokens | Cost |",
-    "|---|---|---|---|",
-    ...rows,
-    "",
-  ].join("\n");
-}
-
-/** The PR comment's last line: what this run cost. */
+/** The report's last line: what this run cost. */
 function footer(results: readonly CallResult[]): string {
-  return `<sub>decision-model-linter on this commit: ${describeUsage(usage(results))}</sub>\n`;
+  return `<sub>decision-model-linter: ${describeUsage(usage(results))}</sub>\n`;
 }
 
 /** 1 if any finding or unchecked file is at `error`, else 0. */

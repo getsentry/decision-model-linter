@@ -138,7 +138,7 @@ test("--base skips unchanged files, marks new lines, and lints files moved into 
   const cwd = await repo();
   await writeFile(join(cwd, "decision-model-linter.config.ts"), configSource(`[{ value: "TRUE", report: "r" }, { value: "FALSE" }]`));
   const client = new FakeModel(() => ({ type: "yesno", yes: 0.9 }));
-  const code = await main(["--base", "main", "--format", "json", "."], { cwd, env: {}, write: () => {}, connect: () => client });
+  const code = await main(["--base", "main", "--format", "json", "."], { cwd, write: () => {}, writeError: () => {}, connect: () => client });
   assert.equal(code, 0);
   const byPath = Object.fromEntries(client.calls.map((c) => [c.state.path, c.state.content]));
   assert.deepEqual(Object.keys(byPath).sort(), ["entered.py", "modified.py", "moved_to.py", "new.py"]);
@@ -155,7 +155,7 @@ test("--base without paths lints the files changed since the merge base", async 
   const cwd = await repo();
   await writeFile(join(cwd, "decision-model-linter.config.ts"), configSource(`[{ value: "TRUE", report: "r" }, { value: "FALSE" }]`));
   const client = new FakeModel(() => ({ type: "yesno", yes: 0.1 }));
-  const code = await main(["--base", "main", "--format", "json"], { cwd, env: {}, write: () => {}, connect: () => client });
+  const code = await main(["--base", "main", "--format", "json"], { cwd, write: () => {}, writeError: () => {}, connect: () => client });
   assert.equal(code, 0);
   assert.deepEqual(client.calls.map((c) => c.state.path).sort(), ["entered.py", "modified.py", "moved_to.py", "new.py"]);
 });
@@ -165,7 +165,7 @@ test("--base without paths and with no changes makes no calls", async () => {
   execFileSync("git", ["switch", "-q", "main"], { cwd });
   await writeFile(join(cwd, "decision-model-linter.config.ts"), configSource());
   const client = new FakeModel();
-  const code = await main(["--base", "main"], { cwd, env: {}, write: () => {}, connect: () => client });
+  const code = await main(["--base", "main"], { cwd, write: () => {}, writeError: () => {}, connect: () => client });
   assert.equal(code, 0);
   assert.equal(client.calls.length, 0);
 });

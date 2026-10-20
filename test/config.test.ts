@@ -151,14 +151,3 @@ test("a config that fails to load is reported by its first line only", async () 
     return true;
   });
 });
-
-test("overrideLabel is a run setting on the config", () => {
-  const config = { model, files: ["*.py"], overrideLabel: "Override lint", suites: { api: { rules: { f: rule } } } };
-  assert.equal(resolveConfig(config).overrideLabel, "Override lint");
-  assert.equal(resolveConfig({ ...config, overrideLabel: undefined }).overrideLabel, undefined);
-  assert.throws(() => resolveConfig({ ...config, overrideLabel: " " }), /config\.overrideLabel: must be a non-empty string/);
-  assert.throws(
-    () => resolveConfig({ model, files: ["*.py"], suites: { api: { overrideLabel: "x", rules: { f: rule } } } }),
-    /suites\.api\.overrideLabel: unknown setting/,
-  );
-});
