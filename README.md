@@ -90,18 +90,16 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, labeled, unlabeled]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.number }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     # Never pull_request_target, which would give a pull request's code the key. Forks get no
-    # secrets, so skip them; of label events, only the override label re-runs the check.
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
-      github.event.label.name == 'Override decision model lint')
-    # Job-level, so a skipped run for another label does not cancel a real one.
-    concurrency:
-      group: decision-model-lint-${{ github.event.number }}
-      cancel-in-progress: true
+    # secrets, so skip them. Every label change re-runs the lint, because a skipped run would
+    # replace the last result.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
