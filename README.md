@@ -81,17 +81,27 @@ npm install --save-dev @sentry/decision-model-linter
 
 ## In GitHub Actions
 
+The CLI knows nothing about pull requests: it lints a changeset or files, prints a report, and exits 0 when nothing fails, 1 when an error is found, or 2 when it could not finish. The workflow owns the pull request: the comment, and a label that lets a person accept a failure.
+
 ```yaml
 name: Decision model lint
 
 on:
   pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
 
 jobs:
   lint:
-    # Pull requests from forks get no secrets. Never use pull_request_target, which would give a
-    # pull request's code the key; the linter refuses to run on it.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Never pull_request_target, which would give a pull request's code the key. Forks get no
+    # secrets, so skip them; of label events, only the override label re-runs the check.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+      github.event.label.name == 'Override decision model lint')
+    # Job-level, so a skipped run for another label does not cancel a real one.
+    concurrency:
+      group: decision-model-lint-${{ github.event.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -108,16 +118,46 @@ jobs:
       - run: npm ci
       - name: Lint
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           OPENROUTER_API_KEY: ${{ secrets.YOUR_OPENROUTER_KEY }}
-        run: npx decision-model-linter --base HEAD^1 --format github --pr-comment
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.number }}
+          LABEL: Override decision model lint
+          OVERRIDDEN: "${{ contains(github.event.pull_request.labels.*.name, 'Override decision model lint') }}"
+        run: |
+          status=0
+          npx decision-model-linter --base HEAD^1 --format markdown > report.md || status=$?
+
+          # Only 1 means findings; any other failure means the linter did not finish.
+          if [ "$status" -eq 1 ] && [ "$OVERRIDDEN" = true ]; then
+            printf '\nThe `%s` label keeps these errors from failing the check.\n' "$LABEL" >> report.md
+          elif [ "$status" -eq 1 ]; then
+            printf '\nThese errors fail the check; fix the code to resolve them. If you and a reviewer are confident an error is wrong, a person can add the `%s` label to pass the check while the findings stay reported. Agents should never add this label.\n' "$LABEL" >> report.md
+          fi
+
+          marker='<!-- decision-model-linter -->'
+          comment=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | .id" | head -n 1)
+          body=
+          if [ "$status" -le 1 ] && [ -s report.md ]; then
+            body=$(printf '%s\n%s' "$marker" "$(cat report.md)")
+          elif [ "$status" -eq 0 ] && [ -n "$comment" ]; then
+            body=$(printf '%s\nNo findings on the latest commit.' "$marker")
+          fi
+          if [ -n "$body" ] && [ -n "$comment" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$comment" -f body="$body" > /dev/null
+          elif [ -n "$body" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$body" > /dev/null
+          fi
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$status" -ne 0 ] && [ "$OVERRIDDEN" = true ]; then exit 0; fi
+          exit "$status"
 ```
 
 On a pull request, this:
 - lints the lines the pull request's merge commit changes relative to its first parent;
-- annotates findings;
-- keeps one pull request comment up to date;
-- reports each run's calls, tokens, cost, and model.
+- keeps one pull request comment with the findings, the cost, and the model, and says how the override label applies when the check fails;
+- passes the check when the override label is on the pull request, while the findings stay reported.
 
 The config, its suites, and the package version in the lockfile all come from the pull request's own commit, so a pull request that adds or changes a rule is linted by it.
 
@@ -134,13 +174,14 @@ OPENROUTER_API_KEY=... npx decision-model-linter -- src/
 | `--config <path>` | Config file. Default `decision-model-linter.config.ts`. |
 | `--suite <name>` | Run only this suite; repeatable. |
 | `--base <ref>` | Lint only the lines changed since the merge base with `<ref>`; without paths, the files changed since then. |
-| `--format stylish\|json\|github` | Output format. Default `stylish`. |
-| `--pr-comment` | Keep the pull request comment up to date (in GitHub Actions). |
+| `--format stylish\|json\|github\|markdown` | Output format, to stdout. `github` prints workflow-command annotations; `markdown` prints nothing when there is nothing to report. Default `stylish`. |
 
-Exit codes:
-- **2** on a setup error: the config fails to load or validate, a suite or provider name is unknown, or a selected rule's key is empty.
+Exit codes, as with eslint and ruff:
+- **0** when no finding or unchecked file is at `error`.
 - **1** when any finding or unchecked file is at `error`.
-- **0** otherwise.
+- **2** when the run could not finish: the config fails to load or validate, a suite or provider name is unknown, a selected rule's key is empty, or the CLI crashes.
+
+The report goes to stdout; usage and setup errors go to stderr.
 
 ## Development
 

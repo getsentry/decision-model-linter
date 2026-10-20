@@ -5,8 +5,7 @@ import { test } from "node:test";
 
 import { main } from "../src/cli.ts";
 import type { CallResult } from "../src/evaluate.ts";
-import { type CommentApi, upsertComment } from "../src/github.ts";
-import { COMMENT_MARKER, cleanComment, describeUsage, exitCode, format, prComment, summary, usage } from "../src/report.ts";
+import { describeUsage, exitCode, format, usage } from "../src/report.ts";
 import { FakeModel, configSource, tree } from "./helpers.ts";
 
 function call(path: string, findings: Partial<CallResult["findings"][number]>[], gap: Partial<CallResult> = {}): CallResult {
@@ -64,7 +63,6 @@ test("usage adds up tokens and cost across calls", () => {
   assert.deepEqual(counts, { calls: 3, files: 2, inputTokens: 9912, outputTokens: 75, unpriced: 1, models: [] });
   assert.ok(Math.abs(cost - 0.00041) < 1e-12);
   assert.equal(describeUsage(usage(results)), "3 calls on 2 files, 9,912 input tokens, $0.00041, cost missing for 1");
-  assert.match(summary(results), /\| api \| 2 \| 9,812 \| \$0\.00041 \|\n\| security \| 1 \| 100 \| \$0 \|/);
 });
 
 test("usage names every model version that answered", () => {
@@ -90,26 +88,22 @@ test("json names the provider and model, and every rule's probabilities", () => 
   assert.deepEqual([parsed.provider, parsed.model, parsed.answers], ["openrouter", "test-model-2026", result.answers]);
 });
 
-test("PR comment lists findings by file, or is null when there are none", () => {
-  const body = prComment([call("a.py", [{}]), call("b.py", [])]);
-  assert.ok(body?.startsWith(COMMENT_MARKER));
-  assert.match(body!, /### api\n\n\*\*`a.py`\*\*\n\n- \*\*warn\*\* `createsNewApiEndpoint = TRUE` \(0.97\): Extend the existing operation./);
-  assert.ok(!body!.includes("`b.py`"));
-  assert.match(body!, /<sub>decision-model-linter on this commit: 2 calls on 2 files, 0 input tokens, \$0<\/sub>\n$/);
-  assert.equal(prComment([call("b.py", [])]), null);
-  assert.match(cleanComment([call("b.py", [])]), /No findings on the latest commit\.\n\n<sub>decision-model-linter on this commit: 1 call/);
+test("markdown lists findings by suite and file, and is empty when there is nothing to report", () => {
+  const body = format([call("a.py", [{}]), call("b.py", [])], "markdown");
+  assert.match(body, /^## decision-model-linter\n\n### api\n\n\*\*`a.py`\*\*\n\n- \*\*warn\*\* `createsNewApiEndpoint = TRUE` \(0.97\): Extend the existing operation./);
+  assert.ok(!body.includes("`b.py`"));
+  assert.match(body, /<sub>decision-model-linter: 2 calls on 2 files, 0 input tokens, \$0<\/sub>\n$/);
+  assert.equal(format([call("b.py", [])], "markdown"), "");
 });
 
 test("unchecked files are reported at their severity in every format instead of reading as clean", () => {
   const results = [failed("a.py"), call("big.py", [], { truncated: true, unchecked: "error" }), call("ok.py", [])];
 
-  const body = prComment(results);
-  assert.ok(body?.startsWith(COMMENT_MARKER));
+  const body = format(results, "markdown");
   assert.match(
-    body!,
+    body,
     /### Not fully checked\n\nFindings may be missing for these files:\n\n- \*\*warn\*\* `a\.py` \(api\): not checked: HTTP 500: boom\n- \*\*error\*\* `big\.py` \(api\): too large for one call, so the end was not checked/,
   );
-  assert.doesNotMatch(body!, /No findings/);
 
   const annotations = format(results, "github");
   assert.match(annotations, /^::warning file=a\.py,title=decision-model-linter api::not checked: HTTP 500: boom$/m);
@@ -127,47 +121,11 @@ test("exit codes", () => {
   assert.equal(exitCode([failed("b.py", "error")]), 1);
 });
 
-class FakeComments implements CommentApi {
-  existing: number | null;
-  actions: [string, number, string][] = [];
-
-  constructor(existing: number | null) {
-    this.existing = existing;
-  }
-  async findComment() {
-    return this.existing;
-  }
-  async createComment(pr: number, body: string) {
-    this.actions.push(["create", pr, body]);
-  }
-  async updateComment(id: number, body: string) {
-    this.actions.push(["update", id, body]);
-  }
-}
-
-test("PR comment lifecycle", async () => {
-  const first = new FakeComments(null);
-  assert.equal(await upsertComment(first, 7, "findings", "clean"), "created");
-  assert.deepEqual(first.actions, [["create", 7, "findings"]]);
-
-  const later = new FakeComments(42);
-  assert.equal(await upsertComment(later, 7, "new findings", "clean"), "updated");
-  assert.deepEqual(later.actions, [["update", 42, "new findings"]]);
-
-  const resolved = new FakeComments(42);
-  assert.equal(await upsertComment(resolved, 7, null, "clean"), "cleared");
-  assert.deepEqual(resolved.actions, [["update", 42, "clean"]]);
-
-  const clean = new FakeComments(null);
-  assert.equal(await upsertComment(clean, 7, null, "clean"), "none");
-  assert.deepEqual(clean.actions, []);
-});
-
 test("CLI lints matching files with the config and exits by severity", async () => {
   const cwd = await tree({ "a.py": "x", "skip.txt": "x", "decision-model-linter.config.ts": configSource() });
   let output = "";
   const client = new FakeModel(() => ({ type: "yesno", yes: 0.95 }));
-  const code = await main(["."], { cwd, env: {}, write: (text) => (output += text), connect: () => client });
+  const code = await main(["."], { cwd, write: (text) => (output += text), writeError: (text) => (output += text), connect: () => client });
   assert.equal(code, 1);
   assert.deepEqual(client.calls.map((c) => c.state.path), ["a.py"]);
   assert.match(output, /error {2}api\/f = TRUE \(0\.95\) {2}Fix\./);
@@ -177,7 +135,7 @@ test("CLI lints matching files with the config and exits by severity", async () 
 test("CLI --config points at a config anywhere", async () => {
   const cwd = await tree({ "a.py": "x", "lint/config.ts": configSource() });
   const client = new FakeModel();
-  const code = await main(["--config", "lint/config.ts", "a.py"], { cwd, env: {}, write: () => {}, connect: () => client });
+  const code = await main(["--config", "lint/config.ts", "a.py"], { cwd, write: () => {}, writeError: () => {}, connect: () => client });
   assert.equal(code, 0);
   assert.equal(client.calls.length, 1);
 });
@@ -185,7 +143,7 @@ test("CLI --config points at a config anywhere", async () => {
 test("CLI treats everything after -- as a path, even one that looks like an option", async () => {
   const cwd = await tree({ "--config=elsewhere.py": "x", "decision-model-linter.config.ts": configSource() });
   const client = new FakeModel();
-  const code = await main(["--", "--config=elsewhere.py"], { cwd, env: {}, write: () => {}, connect: () => client });
+  const code = await main(["--", "--config=elsewhere.py"], { cwd, write: () => {}, writeError: () => {}, connect: () => client });
   assert.equal(code, 0);
   assert.deepEqual(client.calls.map((c) => c.state.path), ["--config=elsewhere.py"]);
 });
@@ -205,7 +163,7 @@ test("CLI sends the configured model name to the configured url", async () => {
   };
   let output = "";
   try {
-    assert.equal(await main(["a.py"], { cwd, env: {}, write: (text) => (output += text) }), 0);
+    assert.equal(await main(["a.py"], { cwd, write: (text) => (output += text), writeError: (text) => (output += text) }), 0);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -218,7 +176,7 @@ test("CLI exits 2 before any call when a selected rule's key is empty, naming th
   const cwd = await tree({ "a.py": "x", "decision-model-linter.config.ts": config });
   const client = new FakeModel();
   let output = "";
-  const code = await main(["a.py"], { cwd, env: {}, write: (text) => (output += text), connect: () => client });
+  const code = await main(["a.py"], { cwd, write: (text) => (output += text), writeError: (text) => (output += text), connect: () => client });
   assert.equal(code, 2);
   assert.equal(client.calls.length, 0);
   assert.match(output, /config\.model\.apiKey is empty/);
@@ -227,7 +185,7 @@ test("CLI exits 2 before any call when a selected rule's key is empty, naming th
 test("CLI reports a broken config and exits 2", async () => {
   const cwd = await tree({ "decision-model-linter.config.ts": "export default { suites: { api: { files: [] } } };\n" });
   let output = "";
-  const code = await main([], { cwd, env: {}, write: (text) => (output += text) });
+  const code = await main([], { cwd, write: (text) => (output += text), writeError: (text) => (output += text) });
   assert.equal(code, 2);
   assert.match(output, /decision-model-linter config: suites\.api\.files: must not be empty/);
 });
@@ -235,23 +193,32 @@ test("CLI reports a broken config and exits 2", async () => {
 test("CLI exits 2 for an unknown suite", async () => {
   const cwd = await tree({ "decision-model-linter.config.ts": configSource() });
   let output = "";
-  const code = await main(["--suite", "secrity"], { cwd, env: {}, write: (text) => (output += text) });
+  const code = await main(["--suite", "secrity"], { cwd, write: (text) => (output += text), writeError: (text) => (output += text) });
   assert.equal(code, 2);
   assert.match(output, /no suite named secrity/);
 });
 
-test("CLI refuses pull_request_target before loading the config", async () => {
-  const cwd = await tree({ "decision-model-linter.config.ts": "throw new Error('the config must not load');\n" });
-  let output = "";
-  const code = await main([], { cwd, env: { GITHUB_EVENT_NAME: "pull_request_target" }, write: (text) => (output += text) });
+test("CLI writes setup errors to stderr and nothing to stdout", async () => {
+  const cwd = await tree({ "decision-model-linter.config.ts": "export default { suites: { api: { files: [] } } };\n" });
+  let out = "";
+  let err = "";
+  const code = await main(["--format", "markdown"], { cwd, write: (text) => (out += text), writeError: (text) => (err += text) });
   assert.equal(code, 2);
-  assert.match(output, /refusing to run on pull_request_target/);
+  assert.equal(out, "");
+  assert.match(err, /decision-model-linter config: suites\.api\.files: must not be empty/);
 });
 
-test("CLI appends the job summary when GITHUB_STEP_SUMMARY is set", async () => {
+test("CLI exits 2, not 1, when it crashes", async () => {
   const cwd = await tree({ "a.py": "x", "decision-model-linter.config.ts": configSource() });
-  const summaryPath = join(cwd, "summary.md");
-  await writeFile(summaryPath, "");
-  await main(["a.py"], { cwd, env: { GITHUB_STEP_SUMMARY: summaryPath }, write: () => {}, connect: () => new FakeModel() });
-  assert.match(await readFile(summaryPath, "utf8"), /### decision-model-linter\n\n1 call on 1 file/);
+  let err = "";
+  const code = await main(["a.py"], {
+    cwd,
+    write: () => {
+      throw new Error("stdout closed");
+    },
+    writeError: (text) => (err += text),
+    connect: () => new FakeModel(() => ({ type: "yesno", yes: 0.95 })),
+  });
+  assert.equal(code, 2);
+  assert.match(err, /decision-model-linter: Error: stdout closed/);
 });
