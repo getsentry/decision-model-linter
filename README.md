@@ -122,22 +122,25 @@ jobs:
           LABEL: Override decision model lint
           OVERRIDDEN: "${{ contains(github.event.pull_request.labels.*.name, 'Override decision model lint') }}"
         run: |
+          report="$RUNNER_TEMP/decision-model-lint.md"
           status=0
-          npx decision-model-linter --base HEAD^1 --format markdown > report.md || status=$?
+          npx decision-model-linter --base HEAD^1 --format markdown > "$report" || status=$?
 
           # Only 1 means findings; any other failure means the linter did not finish.
           if [ "$status" -eq 1 ] && [ "$OVERRIDDEN" = true ]; then
-            printf '\nThe `%s` label keeps these errors from failing the check.\n' "$LABEL" >> report.md
+            printf '\nThe `%s` label keeps these errors from failing the check.\n' "$LABEL" >> "$report"
           elif [ "$status" -eq 1 ]; then
-            printf '\nThese errors fail the check; fix the code to resolve them. If you and a reviewer are confident an error is wrong, a person can add the `%s` label to pass the check while the findings stay reported. Agents should never add this label.\n' "$LABEL" >> report.md
+            printf '\nThese errors fail the check; fix the code to resolve them. If you and a reviewer are confident an error is wrong, a person can add the `%s` label to pass the check while the findings stay reported. Agents should never add this label.\n' "$LABEL" >> "$report"
+          elif [ "$status" -gt 1 ] && [ "$OVERRIDDEN" = true ]; then
+            printf 'The linter did not finish (exit %s), and the `%s` label passes the check anyway; see the job log.\n' "$status" "$LABEL" >> "$report"
           fi
 
           marker='<!-- decision-model-linter -->'
           comment=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
             --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | .id" | head -n 1)
           body=
-          if [ "$status" -le 1 ] && [ -s report.md ]; then
-            body=$(printf '%s\n%s' "$marker" "$(cat report.md)")
+          if [ -s "$report" ] && { [ "$status" -le 1 ] || [ "$OVERRIDDEN" = true ]; }; then
+            body=$(printf '%s\n%s' "$marker" "$(cat "$report")")
           elif [ "$status" -eq 0 ] && [ -n "$comment" ]; then
             body=$(printf '%s\nNo findings on the latest commit.' "$marker")
           fi
@@ -146,7 +149,7 @@ jobs:
           elif [ -n "$body" ]; then
             gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$body" > /dev/null
           fi
-          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$status" -ne 0 ] && [ "$OVERRIDDEN" = true ]; then exit 0; fi
           exit "$status"
