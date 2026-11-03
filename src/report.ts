@@ -45,6 +45,17 @@ export function describeUsage(u: Usage): string {
   return parts.join(", ");
 }
 
+/** Decision usage and separately accounted optional extraction calls. */
+function describeRunUsage(results: readonly CallResult[]): string {
+  const passes = results.flatMap((call) => call.citation ? [call.citation] : []);
+  const calls = passes.reduce((sum, pass) => sum + pass.calls, 0);
+  const tokens = passes.reduce((sum, pass) => sum + (pass.inputTokens ?? 0), 0);
+  const missing = passes.filter((pass) => pass.calls && pass.inputTokens === undefined).length;
+  return describeUsage(usage(results)) + (passes.length
+    ? `; citation: ${calls} calls, ${tokens.toLocaleString("en-US")} input tokens${missing ? ` (usage missing for ${missing})` : ""}`
+    : "");
+}
+
 /** The run's results in one output format. */
 export function format(results: readonly CallResult[], kind: Format): string {
   if (kind === "json") return `${JSON.stringify(results, null, 2)}\n`;
@@ -74,23 +85,28 @@ function stylish(results: readonly CallResult[]): string {
       `✖ ${total} ${total === 1 ? "problem" : "problems"} (${plural(counts.error, "error")}, ${plural(counts.warn, "warning")})`,
     );
   }
-  lines.push(`decision-model-linter: ${describeUsage(usage(results))}`);
+  lines.push(`decision-model-linter: ${describeRunUsage(results)}`);
   return `${lines.join("\n")}\n`;
 }
 
-/** One GitHub workflow command per finding and unchecked file, plus a notice with the run's usage. */
+/** GitHub commands for finding locations or file-level findings, unchecked files, citation diagnostics, and usage. */
 function github(results: readonly CallResult[]): string {
   const command = (severity: Severity) => (severity === "error" ? "error" : "warning");
   const lines = results.flatMap((call) => [
-    ...call.findings.map(
-      (f) =>
-        `::${command(f.severity)} file=${property(f.path)},title=${property(`decision-model-linter ${f.suite}/${f.rule}`)}::${data(f.message)}`,
-    ),
+    ...call.findings.flatMap((f) => (f.locations?.length ? f.locations : [undefined]).map((location) => {
+      const range = location
+        ? `,line=${location.line},endLine=${location.endLine}${location.line === location.endLine ? `,col=${location.col},endColumn=${location.endColumn}` : ""}`
+        : "";
+      return `::${command(f.severity)} file=${property(f.path)}${range},title=${property(`decision-model-linter ${f.suite}/${f.rule}`)}::${data(f.message)}`;
+    })),
     ...(call.unchecked
       ? [`::${command(call.unchecked)} file=${property(call.path)},title=${property(`decision-model-linter ${call.suite}`)}::${data(gap(call))}`]
       : []),
   ]);
-  lines.push(`::notice title=${property("decision-model-linter usage")}::${data(describeUsage(usage(results)))}`);
+  for (const call of results) {
+    if (call.citation?.error) lines.push(`::notice file=${property(call.path)},title=decision-model-linter citation::${data(call.citation.error)}`);
+  }
+  lines.push(`::notice title=${property("decision-model-linter usage")}::${data(describeRunUsage(results))}`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -131,7 +147,7 @@ function gap(call: CallResult): string {
 
 /** The report's last line: what this run cost. */
 function footer(results: readonly CallResult[]): string {
-  return `<sub>decision-model-linter: ${describeUsage(usage(results))}</sub>\n`;
+  return `<sub>decision-model-linter: ${describeRunUsage(results)}</sub>\n`;
 }
 
 /** 1 if any finding or unchecked file is at `error`, else 0. */

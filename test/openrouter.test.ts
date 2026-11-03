@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
 import { ModelError } from "../src/models.ts";
-import { DECISIONS_URL, openRouter } from "../src/openrouter.ts";
+import { DECISIONS_URL, EXTRACTIONS_URL, openRouter } from "../src/openrouter.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -79,4 +79,34 @@ test("a missing answer is an error", async () => {
     openRouter({ name: "test-model", apiKey: "test" }).decide({}, { f: { type: "yesno", instructions: "Q?" } }),
     /no answer for: f/,
   );
+});
+
+
+test("extractions use the OpenRouter key and documented request shape", async () => {
+  const output = { model: "cloudflare/clairic", answers: { evidence: { type: "list", value: ["code"], spans: [[0, 4]], confidence: 0.9 } }, usage: { input_tokens: 40, output_tokens: 0 } };
+  const sent = stubFetch(() => Response.json(output));
+  const fields = { evidence: { type: "list", items: "text", instructions: "Select the code." } };
+  const result = await openRouter({ name: "cloudflare/clairic", apiKey: "shared-openrouter-key" }).extract("code", fields);
+  assert.equal(sent[0].url, EXTRACTIONS_URL);
+  assert.equal(sent[0].headers.get("authorization"), "Bearer shared-openrouter-key");
+  assert.deepEqual(sent[0].body, { model: "cloudflare/clairic", state: "code", fields });
+  assert.deepEqual(result, output);
+});
+
+test("extraction endpoint overrides work and failed calls are not retried", async () => {
+  const sent = stubFetch(() => Response.json({ error: { message: "Unavailable" } }, { status: 503 }));
+  await assert.rejects(openRouter({ name: "cloudflare/clairic", apiKey: "test", url: "https://extractions.example/v1" }).extract("code", {}), /HTTP 503/);
+  assert.equal(sent[0].url, "https://extractions.example/v1");
+  assert.equal(sent.length, 1);
+});
+
+
+test("one client routes decisions and extractions to their respective endpoints", async () => {
+  const sent = stubFetch(() => Response.json({ answers: { flag: { noul: 0.8 } } }));
+  const client = openRouter({ name: "test-model", apiKey: "shared-key" });
+  await client.decide({ content: "code" }, { flag: { type: "yesno", instructions: "Flag?" } });
+  await client.extract("code", { evidence: { type: "list", items: "text" } });
+  assert.deepEqual(sent.map((request) => request.url), [DECISIONS_URL, EXTRACTIONS_URL]);
+  assert.ok(sent.every((request) => request.headers.get("authorization") === "Bearer shared-key"));
+  assert.ok(sent.every((request) => request.body.model === "test-model"));
 });

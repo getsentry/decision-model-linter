@@ -1,27 +1,35 @@
-// The `openrouter` provider: OpenRouter's decisions API, whose `noul` and `choice` primitives are
-// yes/no and multiple-choice questions (https://docs.typesafe.ai/primitives/noul).
+// The `openrouter` provider: typed decisions and source extraction through OpenRouter's alpha APIs.
 import { type Answer, type DecisionModel, type Question, ModelError } from "./models.ts";
 
 export const DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
+export const EXTRACTIONS_URL = "https://openrouter.ai/api/alpha/extractions";
+
+/** An OpenRouter model client supporting decision and extraction requests. */
+export interface OpenRouterClient extends DecisionModel {
+  extract(state: string, fields: Record<string, object>): Promise<any>;
+}
 
 const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 
-/** A decision model served by OpenRouter's decisions API. */
+/** A model client sharing credentials and transport across decisions and extractions.
+ * Decisions default to a 180-second timeout and two retries; extraction defaults to 30 seconds
+ * without retries. Explicit timeout/retry options override either method's defaults.
+ */
 export function openRouter(options: {
   name: string;
   apiKey: string;
   url?: string;
   timeoutMs?: number;
   retries?: number;
-}): DecisionModel {
-  const { name, apiKey, url = DECISIONS_URL, timeoutMs = 180_000, retries = 2 } = options;
+}): OpenRouterClient {
+  const { name, apiKey, url, timeoutMs, retries } = options;
 
   return {
     async decide(state, questions) {
       const asked = Object.fromEntries(Object.entries(questions).map(([id, q]) => [id, toApi(q)]));
       const body = JSON.stringify({ model: name, state, questions: asked });
       const started = performance.now();
-      const payload = await post(url, apiKey, body, timeoutMs, retries);
+      const payload = await post(url ?? DECISIONS_URL, apiKey, body, timeoutMs ?? 180_000, retries ?? 2);
       const durationMs = performance.now() - started;
 
       const raw = payload.answers ?? {};
@@ -39,6 +47,12 @@ export function openRouter(options: {
         durationMs,
         model: payload.model,
       };
+    },
+    async extract(state, fields) {
+      return post(
+        url ?? EXTRACTIONS_URL, apiKey,
+        JSON.stringify({ model: name, state, fields }), timeoutMs ?? 30_000, retries ?? 0,
+      );
     },
   };
 }
@@ -62,7 +76,7 @@ function fromApi(question: Question, answer: any): Answer | null {
     : null;
 }
 
-/** POSTs to the decisions API, retrying rate limits and server errors with backoff. */
+/** POSTs to an OpenRouter endpoint, retrying rate limits and server errors with backoff when enabled. */
 async function post(url: string, apiKey: string, body: string, timeoutMs: number, retries: number): Promise<any> {
   for (let attempt = 0; ; attempt++) {
     let failure: ModelError;

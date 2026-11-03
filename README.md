@@ -79,7 +79,51 @@ If the repository's `package.json` has no `"type": "module"`, keep the config in
 npm install --save-dev @sentry/decision-model-linter
 ```
 
+## Optional source citations
+
+Use [Clairic through OpenRouter's extractions API](https://openrouter.ai/docs/client-sdks/typescript/sdks/extractions/README)
+to attach source locations to findings. Configure it as a `Model`, like Jev,
+using the same OpenRouter API key:
+
+```ts
+const clairic = {
+  provider: "openrouter",
+  name: "cloudflare/clairic",
+  apiKey: process.env.OPENROUTER_API_KEY,
+  maxInputTokens: 8192,
+} satisfies Model;
+
+export default {
+  model: jev,
+  citation: { ...clairic, threshold: 0.7 },
+  suites: { security },
+} satisfies Config;
+```
+
+No separate Cloudflare account or credential is needed. The extractions API is
+alpha, and `cloudflare/clairic` availability is not verified. Confirm availability
+for your OpenRouter account before enabling citation.
+
+`citation` is optional and configured on the root config. It accepts the `Model`
+fields plus an extraction confidence `threshold` (default 0.7), independent of the
+decision threshold. Its API key must be nonempty; `url` can override the extraction
+endpoint. Each flagged decision call batches its findings into one extraction
+request, using the source, rule questions, and reported answers as evidence criteria.
+
+Validated source spans become `locations` in JSON output and line/column
+annotations with `--format github`. In changeset mode, evidence must overlap
+changed lines. Failed or inconclusive extraction leaves the original file-level
+finding, severity, and exit status intact. Inputs exceeding `maxInputTokens` are
+skipped rather than truncated; requests time out after 30 seconds without retries.
+Citation calls and input tokens are reported separately; the displayed decision
+cost excludes citation charges.
+
 ## In GitHub Actions
+
+For file annotations instead of a bot comment, run
+`npx decision-model-linter --base HEAD^1 --format github` with stdout connected to
+the runner and omit the comment-posting steps below. Workflow-command annotations
+need no pull-request write permission.
 
 The CLI knows nothing about pull requests: it lints a changeset or files, prints a report, and exits 0 when nothing fails, 1 when an error is found, or 2 when it could not finish. The workflow owns the pull request: the comment, and a label that lets a person accept a failure.
 

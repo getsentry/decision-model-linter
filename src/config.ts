@@ -21,6 +21,12 @@ export interface Model {
   url?: string;
 }
 
+/** Optional second pass that extracts evidence spans through OpenRouter. */
+export interface Citation extends Model {
+  /** Minimum extraction confidence; independent of the rule's decision threshold. Default 0.7. */
+  threshold?: number;
+}
+
 /** Extra state for a rule's calls: a string, or a function of the file called once per file. */
 export type ContextValue = string | ((file: { path: string }) => string | Promise<string>);
 
@@ -57,6 +63,7 @@ export interface Suite extends Settings {
 
 /** A repository's config: its suites, defaults for their rules, and how many calls run at once. */
 export interface Config extends Settings {
+  citation?: Citation;
   concurrency?: number;
   suites: Record<string, Suite>;
 }
@@ -94,7 +101,7 @@ export class ConfigError extends Error {}
 export async function loadConfig(
   path: string,
   only: readonly string[] = [],
-): Promise<{ rules: ResolvedRule[]; concurrency: number }> {
+): Promise<{ rules: ResolvedRule[]; concurrency: number; citation?: Citation }> {
   let module;
   try {
     module = await import(pathToFileURL(resolve(path)).href);
@@ -106,10 +113,17 @@ export async function loadConfig(
 }
 
 /** Checks a config's default export and resolves every rule's settings. */
-export function resolveConfig(raw: unknown, only: readonly string[] = []): { rules: ResolvedRule[]; concurrency: number } {
+export function resolveConfig(raw: unknown, only: readonly string[] = []): { rules: ResolvedRule[]; concurrency: number; citation?: Citation } {
   if (!isObject(raw)) throw new ConfigError("config: must default-export an object");
-  checkKeys(raw, "config", [...SETTING_KEYS, "concurrency", "suites"]);
+  checkKeys(raw, "config", [...SETTING_KEYS, "concurrency", "suites", "citation"]);
   checkSettings(raw, "config");
+  if (raw.citation !== undefined) {
+    const value = raw.citation;
+    if (!isObject(value)) throw new ConfigError("config.citation: must be an object");
+    const { threshold, ...model } = value;
+    checkModel(model, "config.citation");
+    if (value.threshold !== undefined) checkThreshold(value.threshold, "config.citation.threshold");
+  }
   const { concurrency = DEFAULT_CONCURRENCY } = raw;
   if (!Number.isInteger(concurrency) || concurrency < 1) {
     throw new ConfigError("config.concurrency: must be a positive integer");
@@ -134,7 +148,7 @@ export function resolveConfig(raw: unknown, only: readonly string[] = []): { rul
       if (!only.length || only.includes(suiteName)) rules.push(resolved);
     }
   }
-  return { rules, concurrency };
+  return { rules, concurrency, ...(raw.citation ? { citation: raw.citation } : {}) };
 }
 
 /** Checks one rule and resolves its settings from the rule, then its suite, then the config. */
@@ -255,7 +269,7 @@ function checkSeverity(value: unknown, at: string): void {
 
 /** Throws unless `value` is a number in [0, 1]. */
 function checkThreshold(value: unknown, at: string): void {
-  if (typeof value !== "number" || value < 0 || value > 1) throw new ConfigError(`${at}: must be a number in [0, 1]`);
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) throw new ConfigError(`${at}: must be a number in [0, 1]`);
 }
 
 /** Throws unless `value` is a list of strings, and a non-empty one when `nonEmpty`. */
