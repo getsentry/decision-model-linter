@@ -81,6 +81,71 @@ If the repository's `package.json` has no `"type": "module"`, keep the config in
 npm install --save-dev @sentry/decision-model-linter
 ```
 
+## Optional source locations with Clairic
+
+Detection still uses the configured decision model. An optional second pass uses
+[Cloudflare Clairic](https://developers.cloudflare.com/workers-ai/models/clairic/)
+to extract evidence for findings that reached their reporting threshold:
+
+```ts
+export default {
+  model: jev,
+  localization: {
+    url: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run/@cf/cloudflare/clairic`,
+    apiKey: process.env.CLOUDFLARE_API_TOKEN,
+    maxInputTokens: 8192,
+    threshold: 0.7,
+  },
+  suites: { security },
+} satisfies Config;
+```
+
+Use a Cloudflare API token with Workers AI access. `localization` is configured
+once on the root config; omitting it keeps the existing behavior. An explicitly
+configured localization pass requires a nonempty key, like a decision model.
+`threshold` is the minimum extraction confidence and defaults to 0.7; it does not
+change the decision threshold. `maxInputTokens` budgets the source and extraction
+fields using the same conservative character estimate as detection.
+
+Rules can add a `localizationPrompt`, for example:
+
+```ts
+localizationPrompt: "Select each expression that reads or updates URL query parameters without nuqs.",
+```
+
+Each flagged decision call makes at most one extraction request, batching its
+findings as text-list fields. Clairic receives the original, unnumbered file and
+the rule criteria. Returned text must exactly match its source span; accepted
+spans become one-based, inclusive `locations` on the JSON finding. Unicode
+code-point and UTF-16 offsets are checked against the extracted text, and
+ambiguous matches are rejected. Columns count Unicode code points. In changeset
+mode, only evidence overlapping added or changed lines is accepted.
+
+`--format github` emits one annotation per location. Multiline annotations specify
+only their line range, as GitHub requires. Findings without accepted evidence stay
+file-level. Null or low-confidence evidence, invalid spans, provider failures,
+timeouts, and oversized or truncated inputs never remove a finding or change its
+severity or exit status. Oversized extraction inputs are skipped rather than
+truncated; large files therefore retain file-level findings in this first version.
+Requests time out after 30 seconds and are not retried.
+
+Extraction calls and input tokens are reported separately from decision usage;
+the displayed decision-model dollar cost excludes localization charges. JSON
+includes localization diagnostics and usage, and GitHub output also emits a
+notice when the extraction request fails or exceeds its input budget.
+
+To use annotations instead of a bot comment, run the existing CLI directly in an
+Actions step, leaving stdout connected to the runner:
+
+```sh
+npx decision-model-linter --base HEAD^1 --format github
+```
+
+The workflow can retain its override-label exit handling and put any explanatory
+text in `$GITHUB_STEP_SUMMARY`. Remove its comment-posting commands when switching
+to annotations; no Checks API calls or pull-request write permission are needed
+for workflow-command annotations.
+
 ## In GitHub Actions
 
 The CLI knows nothing about pull requests: it lints a changeset or files, prints a report, and exits 0 when nothing fails, 1 when an error is found, or 2 when it could not finish. The workflow owns the pull request: the comment, and a label that lets a person accept a failure.
