@@ -89,7 +89,7 @@ function stylish(results: readonly CallResult[]): string {
   return `${lines.join("\n")}\n`;
 }
 
-/** One GitHub workflow command per finding and unchecked file, plus a notice with the run's usage. */
+/** GitHub commands for finding locations or file-level findings, unchecked files, citation diagnostics, and usage. */
 function github(results: readonly CallResult[]): string {
   const command = (severity: Severity) => (severity === "error" ? "error" : "warning");
   const lines = results.flatMap((call) => [
