@@ -1,5 +1,6 @@
 import type { Citation, ResolvedRule } from "./config.ts";
 import type { Finding } from "./evaluate.ts";
+import { openRouterExtract } from "./openrouter.ts";
 
 /** One-based source coordinates, with an inclusive end, as GitHub annotations expect. */
 export interface SourceLocation {
@@ -51,22 +52,12 @@ export async function citeFindings(
   }
   const result: CitationResult = { calls: 1 };
   try {
-    const response = await fetch(options.url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "clairic", state: source, fields, options: { return_state_text: true } }),
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!response.ok) throw new CitationError(`citation HTTP ${response.status}`);
-    // Workers AI REST wraps model output in result; also accept the direct model response.
-    const payload = await response.json() as any;
-    if (payload.success === false) throw new CitationError("citation API reported failure");
-    const output = payload.result ?? payload;
+    const output = await openRouterExtract(options, source, fields);
     const tokens = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
     result.inputTokens = tokens(output.usage?.input_tokens);
     result.outputTokens = tokens(output.usage?.output_tokens);
     if (output.truncated) throw new CitationError("citation input was truncated");
-    if (output.state_text !== undefined && output.state_text !== source) {
+    if (output.state_text != null && output.state_text !== source) {
       throw new CitationError("citation offsets refer to different source text");
     }
     if (!output.answers || typeof output.answers !== "object") throw new CitationError("citation returned no answers");

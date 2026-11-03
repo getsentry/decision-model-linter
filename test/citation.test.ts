@@ -11,7 +11,8 @@ import { FakeModel, MODEL, configSource, rule, tree } from "./helpers.ts";
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 const citation: Citation = {
-  url: "https://api.cloudflare.com/client/v4/accounts/example/ai/run/@cf/cloudflare/clairic",
+  provider: "openrouter",
+  name: "cloudflare/clairic",
   apiKey: "citation-test-key",
   maxInputTokens: 8192,
 };
@@ -43,14 +44,14 @@ async function run(options: { changed?: Set<number>; citation?: Citation; yes?: 
 }
 
 test("extracts repeated evidence with CRLF coordinates and filters to changed lines", async () => {
-  const sent = stub({ success: true, result: {
+  const sent = stub({
     state_text: source, answers: { f0: evidence(source, ["query.get('old')", "query.get('new')", "query.get('new')"]) },
     usage: { input_tokens: 120, output_tokens: 0 }, truncated: false,
-  } });
+  });
   const results = await run({ changed: new Set([2]) });
   assert.equal(sent.length, 1);
   assert.equal(sent[0].state, source);
-  assert.equal(sent[0].model, "clairic");
+  assert.equal(sent[0].model, "cloudflare/clairic");
   assert.match(sent[0].fields.f0.instructions, /Select query.get calls/);
   assert.match(sent[0].fields.f0.instructions, /changed source lines.*2/);
   assert.deepEqual(results[0].findings[0].locations, [{ line: 2, endLine: 2, col: 7, endColumn: 22 }]);
@@ -82,8 +83,8 @@ test("citation is skipped for clean files and inputs over budget", async () => {
 });
 
 for (const [name, output, status] of [
+  ["unavailable extraction model", { error: { message: "Model cloudflare/clairic does not exist" } }, 400],
   ["HTTP failure", { detail: "private source or credentials" }, 503],
-  ["API failure", { success: false, errors: [{ message: "private" }] }, 200],
   ["truncation", { truncated: true, answers: { f0: evidence(source, [source]) } }, 200],
   ["different state", { state_text: "different", answers: { f0: evidence(source, [source]) } }, 200],
   ["missing answers", {}, 200],
@@ -154,7 +155,7 @@ test("config resolves citation and a missing extraction key fails before model c
   // Config validation rejects unknown fields and invalid limits without revealing values.
   const minimal = { model: MODEL, files: ["*.py"], suites: { api: { rules: { f: { prompt: "Q?", values: [{ value: "TRUE", report: "Fix" }, { value: "FALSE" }] } } } } };
   assert.deepEqual(resolveConfig({ ...minimal, citation }).citation, citation);
-  for (const invalid of [{ ...citation, maxInputTokens: 0 }, { ...citation, threshold: 2 }, { ...citation, url: "file:///tmp/x" }, { ...citation, unknown: true }]) {
+  for (const invalid of [{ ...citation, maxInputTokens: 0 }, { ...citation, threshold: 2 }, { ...citation, provider: "unknown" }, { ...citation, unknown: true }]) {
     assert.throws(() => resolveConfig({ ...minimal, citation: invalid }), /config.citation/);
   }
 });
@@ -190,4 +191,11 @@ test("network failures leave file findings intact", async () => {
   assert.equal(results[0].unchecked, undefined);
   assert.match(results[0].citation!.error!, /request failed/);
   assert.doesNotMatch(JSON.stringify(results), /private/);
+});
+
+
+test("a null optional state_text does not discard valid citations", async () => {
+  stub({ state_text: null, answers: { f0: evidence(source, ["query.get('new')"]) } });
+  const results = await run();
+  assert.equal(results[0].findings[0].locations?.[0].line, 2);
 });
