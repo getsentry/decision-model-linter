@@ -1,14 +1,6 @@
 import type { Citation, ResolvedRule } from "./config.ts";
-import type { Finding } from "./evaluate.ts";
+import type { Finding, SourceLocation } from "./evaluate.ts";
 import { openRouter } from "./openrouter.ts";
-
-/** One-based source coordinates, with an inclusive end, as GitHub annotations expect. */
-export interface SourceLocation {
-  line: number;
-  endLine: number;
-  col: number;
-  endColumn: number;
-}
 
 /** Kept separate from decision usage: extraction failure is not a failed lint decision. */
 export interface CitationResult {
@@ -41,7 +33,6 @@ export async function citeFindings(
         `Rule: ${rule.prompt}`,
         `Reported answer: ${finding.value}. ${rule.values.find((value) => value.value === finding.value)?.description ?? ""}`,
         `Finding: ${finding.message}`,
-        ...(rule.citationPrompt ? [rule.citationPrompt] : []),
       ].join("\n"),
     }];
   }));

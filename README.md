@@ -81,13 +81,11 @@ If the repository's `package.json` has no `"type": "module"`, keep the config in
 npm install --save-dev @sentry/decision-model-linter
 ```
 
-## Optional source locations with Clairic
+## Optional source citations
 
-Detection still uses the configured decision model. An optional second pass uses
-[Cloudflare Clairic](https://developers.cloudflare.com/workers-ai/models/clairic/)
-through [OpenRouter's extractions API](https://openrouter.ai/docs/client-sdks/typescript/sdks/extractions/README)
-to extract evidence for findings that reached their reporting threshold. Configure
-Clairic as a `Model`, just like Jev, using the same OpenRouter API key:
+Use [Clairic through OpenRouter's extractions API](https://openrouter.ai/docs/client-sdks/typescript/sdks/extractions/README)
+to attach source locations to findings. Configure it as a `Model`, like Jev,
+using the same OpenRouter API key:
 
 ```ts
 const clairic = {
@@ -104,59 +102,30 @@ export default {
 } satisfies Config;
 ```
 
-No separate Cloudflare account, token, or service integration is needed.
-`citation` is configured once on the root config; omitting it keeps the existing
-behavior. It accepts the same `Model` fields as detection, plus `threshold`;
-`url` optionally overrides the OpenRouter extractions endpoint for testing.
-The extractions API is alpha, and `cloudflare/clairic` availability is not
-verified. Confirm availability for your OpenRouter account before enabling
-citation; unavailable models leave findings at file level. An explicitly
-configured citation pass requires a nonempty key, like a decision model.
-`threshold` is the minimum extraction confidence and defaults to 0.7; it does not
-change the decision threshold. `maxInputTokens` budgets the source and extraction
-fields using the same conservative character estimate as detection.
+No separate Cloudflare account or credential is needed. The extractions API is
+alpha, and `cloudflare/clairic` availability is not verified. Confirm availability
+for your OpenRouter account before enabling citation.
 
-A rule can add `citationPrompt` alongside `prompt` and `values` to guide evidence
-selection. For `queriesWithoutTenantScope`, for example:
+`citation` is optional and configured on the root config. It accepts the `Model`
+fields plus an extraction confidence `threshold` (default 0.7), independent of the
+decision threshold. Its API key must be nonempty; `url` can override the extraction
+endpoint. Each flagged decision call batches its findings into one extraction
+request, using the source, rule questions, and reported answers as evidence criteria.
 
-```ts
-citationPrompt: "Select each query that accesses tenant rows without filtering on the tenant.",
-```
-
-Each flagged decision call makes at most one extraction request, batching its
-findings as text-list fields. Clairic receives the original, unnumbered file and
-the rule criteria. Returned text must exactly match its source span; accepted
-spans become one-based, inclusive `locations` on the JSON finding. Unicode
-code-point and UTF-16 offsets are checked against the extracted text, and
-ambiguous matches are rejected. Columns count Unicode code points. In changeset
-mode, only evidence overlapping added or changed lines is accepted.
-
-`--format github` emits one annotation per location. Multiline annotations specify
-only their line range, as GitHub requires. Findings without accepted evidence stay
-file-level. Null or low-confidence evidence, invalid spans, provider failures,
-timeouts, and oversized or truncated inputs never remove a finding or change its
-severity or exit status. Oversized extraction inputs are skipped rather than
-truncated; findings remain file-level when the extraction input exceeds its budget.
-Requests time out after 30 seconds and are not retried.
-
-Extraction calls and input tokens are reported separately from decision usage;
-the displayed decision-model dollar cost excludes citation charges. JSON
-includes citation diagnostics and usage, and GitHub output also emits a
-notice when the extraction request fails or exceeds its input budget.
-
-To use annotations instead of a bot comment, run the existing CLI directly in an
-Actions step, leaving stdout connected to the runner:
-
-```sh
-npx decision-model-linter --base HEAD^1 --format github
-```
-
-The workflow can retain its override-label exit handling and put any explanatory
-text in `$GITHUB_STEP_SUMMARY`. Remove its comment-posting commands when switching
-to annotations; no Checks API calls or pull-request write permission are needed
-for workflow-command annotations.
+Validated source spans become `locations` in JSON output and line/column
+annotations with `--format github`. In changeset mode, evidence must overlap
+changed lines. Failed or inconclusive extraction leaves the original file-level
+finding, severity, and exit status intact. Inputs exceeding `maxInputTokens` are
+skipped rather than truncated; requests time out after 30 seconds without retries.
+Citation calls and input tokens are reported separately; the displayed decision
+cost excludes citation charges.
 
 ## In GitHub Actions
+
+For file annotations instead of a bot comment, run
+`npx decision-model-linter --base HEAD^1 --format github` with stdout connected to
+the runner and omit the comment-posting steps below. Workflow-command annotations
+need no pull-request write permission.
 
 The CLI knows nothing about pull requests: it lints a changeset or files, prints a report, and exits 0 when nothing fails, 1 when an error is found, or 2 when it could not finish. The workflow owns the pull request: the comment, and a label that lets a person accept a failure.
 

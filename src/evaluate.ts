@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { type ContextValue, type Citation, type Model, type ResolvedRule, type Severity, DEFAULT_SEVERITY } from "./config.ts";
 import { collapseHiddenLines, linesToShow } from "./changed-lines.ts";
-import { citeFindings, type CitationResult, type SourceLocation } from "./citation.ts";
+import { citeFindings, type CitationResult } from "./citation.ts";
 import { isIgnored, matchesAny } from "./files.ts";
 import { type Answer, type DecisionModel, type Question, type State, ModelError } from "./models.ts";
 
@@ -22,6 +22,14 @@ export const NEW_LINES_INSTRUCTIONS =
   "they never count toward the answer.";
 // Measured on real PRs: any unchanged code shown, even 5 lines, leaks existing
 // violations into the answer; new lines plus open brackets do not.
+
+/** One-based source coordinates, with an inclusive end, as GitHub annotations expect. */
+export interface SourceLocation {
+  line: number;
+  endLine: number;
+  col: number;
+  endColumn: number;
+}
 
 export interface Finding {
   locations?: SourceLocation[];
