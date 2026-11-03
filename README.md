@@ -88,7 +88,7 @@ to extract evidence for findings that reached their reporting threshold:
 ```ts
 export default {
   model: jev,
-  localization: {
+  citation: {
     url: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run/@cf/cloudflare/clairic`,
     apiKey: process.env.CLOUDFLARE_API_TOKEN,
     maxInputTokens: 8192,
@@ -98,17 +98,17 @@ export default {
 } satisfies Config;
 ```
 
-Use a Cloudflare API token with Workers AI access. `localization` is configured
+Use a Cloudflare API token with Workers AI access. `citation` is configured
 once on the root config; omitting it keeps the existing behavior. An explicitly
-configured localization pass requires a nonempty key, like a decision model.
+configured citation pass requires a nonempty key, like a decision model.
 `threshold` is the minimum extraction confidence and defaults to 0.7; it does not
 change the decision threshold. `maxInputTokens` budgets the source and extraction
 fields using the same conservative character estimate as detection.
 
-Rules can add a `localizationPrompt`, for example:
+Rules can add a `citationPrompt`, for example:
 
 ```ts
-localizationPrompt: "Select each expression that reads or updates URL query parameters without nuqs.",
+citationPrompt: "Select each expression that reads or updates URL query parameters without nuqs.",
 ```
 
 Each flagged decision call makes at most one extraction request, batching its
@@ -128,8 +128,8 @@ truncated; large files therefore retain file-level findings in this first versio
 Requests time out after 30 seconds and are not retried.
 
 Extraction calls and input tokens are reported separately from decision usage;
-the displayed decision-model dollar cost excludes localization charges. JSON
-includes localization diagnostics and usage, and GitHub output also emits a
+the displayed decision-model dollar cost excludes citation charges. JSON
+includes citation diagnostics and usage, and GitHub output also emits a
 notice when the extraction request fails or exceeds its input budget.
 
 To use annotations instead of a bot comment, run the existing CLI directly in an

@@ -1,4 +1,4 @@
-import type { Localization, ResolvedRule } from "./config.ts";
+import type { Citation, ResolvedRule } from "./config.ts";
 import type { Finding } from "./evaluate.ts";
 
 /** One-based source coordinates, with an inclusive end, as GitHub annotations expect. */
@@ -10,23 +10,23 @@ export interface SourceLocation {
 }
 
 /** Kept separate from decision usage: extraction failure is not a failed lint decision. */
-export interface LocalizationResult {
+export interface CitationResult {
   calls: number;
   inputTokens?: number;
   outputTokens?: number;
   error?: string;
 }
 
-class LocalizationError extends Error {}
+class CitationError extends Error {}
 
 /** Enriches findings in place. No source is truncated and no finding is removed on failure. */
-export async function localize(
+export async function citeFindings(
   source: string,
   findings: Finding[],
   rules: readonly ResolvedRule[],
   changed: ReadonlySet<number> | undefined,
-  options: Localization,
-): Promise<LocalizationResult> {
+  options: Citation,
+): Promise<CitationResult> {
   const fields = Object.fromEntries(findings.map((finding, i) => {
     const rule = rules.find((rule) => rule.name === finding.rule)!;
     return [`f${i}`, {
@@ -40,16 +40,16 @@ export async function localize(
         `Rule: ${rule.prompt}`,
         `Reported answer: ${finding.value}. ${rule.values.find((value) => value.value === finding.value)?.description ?? ""}`,
         `Finding: ${finding.message}`,
-        ...(rule.localizationPrompt ? [rule.localizationPrompt] : []),
+        ...(rule.citationPrompt ? [rule.citationPrompt] : []),
       ].join("\n"),
     }];
   }));
   // Match the engine's conservative three-characters-per-token estimate. Skip rather than
   // changing the source, which would invalidate offsets or hide relevant evidence.
   if (source.length + JSON.stringify(fields).length + 512 > options.maxInputTokens * 3) {
-    return { calls: 0, error: "source and extraction fields exceed the localization input budget" };
+    return { calls: 0, error: "source and extraction fields exceed the citation input budget" };
   }
-  const result: LocalizationResult = { calls: 1 };
+  const result: CitationResult = { calls: 1 };
   try {
     const response = await fetch(options.url, {
       method: "POST",
@@ -57,19 +57,19 @@ export async function localize(
       body: JSON.stringify({ model: "clairic", state: source, fields, options: { return_state_text: true } }),
       signal: AbortSignal.timeout(30_000),
     });
-    if (!response.ok) throw new LocalizationError(`localization HTTP ${response.status}`);
+    if (!response.ok) throw new CitationError(`citation HTTP ${response.status}`);
     // Workers AI REST wraps model output in result; also accept the direct model response.
     const payload = await response.json() as any;
-    if (payload.success === false) throw new LocalizationError("localization API reported failure");
+    if (payload.success === false) throw new CitationError("citation API reported failure");
     const output = payload.result ?? payload;
     const tokens = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
     result.inputTokens = tokens(output.usage?.input_tokens);
     result.outputTokens = tokens(output.usage?.output_tokens);
-    if (output.truncated) throw new LocalizationError("localization input was truncated");
+    if (output.truncated) throw new CitationError("citation input was truncated");
     if (output.state_text !== undefined && output.state_text !== source) {
-      throw new LocalizationError("localization offsets refer to different source text");
+      throw new CitationError("citation offsets refer to different source text");
     }
-    if (!output.answers || typeof output.answers !== "object") throw new LocalizationError("localization returned no answers");
+    if (!output.answers || typeof output.answers !== "object") throw new CitationError("citation returned no answers");
     for (const [i, finding] of findings.entries()) {
       const answer = output.answers[`f${i}`];
       if (answer?.type !== "list" || !Array.isArray(answer.value) || !Array.isArray(answer.spans) ||
@@ -89,7 +89,7 @@ export async function localize(
   } catch (error) {
     // Do not log provider response bodies, URLs or exception messages: they can contain credentials
     // or source. A failed optional extraction pass leaves the original findings intact.
-    result.error = `${error instanceof LocalizationError ? error.message : "localization request failed"}; retaining file-level findings`;
+    result.error = `${error instanceof CitationError ? error.message : "citation request failed"}; retaining file-level findings`;
   }
   return result;
 }

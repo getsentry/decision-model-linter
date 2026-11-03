@@ -47,12 +47,12 @@ export function describeUsage(u: Usage): string {
 
 /** Decision usage and separately accounted optional extraction calls. */
 function describeRunUsage(results: readonly CallResult[]): string {
-  const passes = results.flatMap((call) => call.localization ? [call.localization] : []);
+  const passes = results.flatMap((call) => call.citation ? [call.citation] : []);
   const calls = passes.reduce((sum, pass) => sum + pass.calls, 0);
   const tokens = passes.reduce((sum, pass) => sum + (pass.inputTokens ?? 0), 0);
   const missing = passes.filter((pass) => pass.calls && pass.inputTokens === undefined).length;
   return describeUsage(usage(results)) + (passes.length
-    ? `; localization: ${calls} calls, ${tokens.toLocaleString("en-US")} input tokens${missing ? ` (usage missing for ${missing})` : ""}`
+    ? `; citation: ${calls} calls, ${tokens.toLocaleString("en-US")} input tokens${missing ? ` (usage missing for ${missing})` : ""}`
     : "");
 }
 
@@ -104,7 +104,7 @@ function github(results: readonly CallResult[]): string {
       : []),
   ]);
   for (const call of results) {
-    if (call.localization?.error) lines.push(`::notice file=${property(call.path)},title=decision-model-linter localization::${data(call.localization.error)}`);
+    if (call.citation?.error) lines.push(`::notice file=${property(call.path)},title=decision-model-linter citation::${data(call.citation.error)}`);
   }
   lines.push(`::notice title=${property("decision-model-linter usage")}::${data(describeRunUsage(results))}`);
   return `${lines.join("\n")}\n`;

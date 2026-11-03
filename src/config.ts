@@ -22,7 +22,7 @@ export interface Model {
 }
 
 /** Optional second pass that extracts evidence spans with Cloudflare Clairic. */
-export interface Localization {
+export interface Citation {
   /** Full Workers AI run endpoint for @cf/cloudflare/clairic. */
   url: string;
   apiKey: string | undefined;
@@ -58,7 +58,7 @@ export interface Value {
 /** A question the model answers about each file the rule matches, and its possible answers. */
 export interface Rule extends Settings {
   /** Additional evidence extraction instruction for this rule. */
-  localizationPrompt?: string;
+  citationPrompt?: string;
   prompt: string;
   values: Value[];
 }
@@ -70,14 +70,14 @@ export interface Suite extends Settings {
 
 /** A repository's config: its suites, defaults for their rules, and how many calls run at once. */
 export interface Config extends Settings {
-  localization?: Localization;
+  citation?: Citation;
   concurrency?: number;
   suites: Record<string, Suite>;
 }
 
 /** A rule with every setting resolved; `modelAt` is the path of the setting its model came from. */
 export interface ResolvedRule {
-  localizationPrompt?: string;
+  citationPrompt?: string;
   suite: string;
   name: string;
   prompt: string;
@@ -109,7 +109,7 @@ export class ConfigError extends Error {}
 export async function loadConfig(
   path: string,
   only: readonly string[] = [],
-): Promise<{ rules: ResolvedRule[]; concurrency: number; localization?: Localization }> {
+): Promise<{ rules: ResolvedRule[]; concurrency: number; citation?: Citation }> {
   let module;
   try {
     module = await import(pathToFileURL(resolve(path)).href);
@@ -121,24 +121,24 @@ export async function loadConfig(
 }
 
 /** Checks a config's default export and resolves every rule's settings. */
-export function resolveConfig(raw: unknown, only: readonly string[] = []): { rules: ResolvedRule[]; concurrency: number; localization?: Localization } {
+export function resolveConfig(raw: unknown, only: readonly string[] = []): { rules: ResolvedRule[]; concurrency: number; citation?: Citation } {
   if (!isObject(raw)) throw new ConfigError("config: must default-export an object");
-  checkKeys(raw, "config", [...SETTING_KEYS, "concurrency", "suites", "localization"]);
+  checkKeys(raw, "config", [...SETTING_KEYS, "concurrency", "suites", "citation"]);
   checkSettings(raw, "config");
-  if (raw.localization !== undefined) {
-    const value = raw.localization;
-    if (!isObject(value)) throw new ConfigError("config.localization: must be an object");
-    checkKeys(value, "config.localization", ["url", "apiKey", "maxInputTokens", "threshold"]);
+  if (raw.citation !== undefined) {
+    const value = raw.citation;
+    if (!isObject(value)) throw new ConfigError("config.citation: must be an object");
+    checkKeys(value, "config.citation", ["url", "apiKey", "maxInputTokens", "threshold"]);
     if (typeof value.url !== "string" || !URL.canParse(value.url) || !["http:", "https:"].includes(new URL(value.url).protocol)) {
-      throw new ConfigError("config.localization.url: must be an HTTP URL");
+      throw new ConfigError("config.citation.url: must be an HTTP URL");
     }
     if (value.apiKey !== undefined && typeof value.apiKey !== "string") {
-      throw new ConfigError("config.localization.apiKey: must be a string");
+      throw new ConfigError("config.citation.apiKey: must be a string");
     }
     if (!Number.isInteger(value.maxInputTokens) || value.maxInputTokens < 1) {
-      throw new ConfigError("config.localization.maxInputTokens: must be a positive integer");
+      throw new ConfigError("config.citation.maxInputTokens: must be a positive integer");
     }
-    if (value.threshold !== undefined) checkThreshold(value.threshold, "config.localization.threshold");
+    if (value.threshold !== undefined) checkThreshold(value.threshold, "config.citation.threshold");
   }
   const { concurrency = DEFAULT_CONCURRENCY } = raw;
   if (!Number.isInteger(concurrency) || concurrency < 1) {
@@ -164,7 +164,7 @@ export function resolveConfig(raw: unknown, only: readonly string[] = []): { rul
       if (!only.length || only.includes(suiteName)) rules.push(resolved);
     }
   }
-  return { rules, concurrency, ...(raw.localization ? { localization: raw.localization } : {}) };
+  return { rules, concurrency, ...(raw.citation ? { citation: raw.citation } : {}) };
 }
 
 /** Checks one rule and resolves its settings from the rule, then its suite, then the config. */
@@ -177,11 +177,11 @@ function resolveRule(
 ): ResolvedRule {
   const at = `suites.${suiteName}.rules.${ruleName}`;
   if (!isObject(rule)) throw new ConfigError(`${at}: must be an object`);
-  checkKeys(rule, at, [...SETTING_KEYS, "prompt", "values", "localizationPrompt"]);
+  checkKeys(rule, at, [...SETTING_KEYS, "prompt", "values", "citationPrompt"]);
   checkSettings(rule, at);
   checkQuestion(rule, at);
-  if (rule.localizationPrompt !== undefined && (typeof rule.localizationPrompt !== "string" || !rule.localizationPrompt.trim())) {
-    throw new ConfigError(`${at}.localizationPrompt: must be a non-empty string`);
+  if (rule.citationPrompt !== undefined && (typeof rule.citationPrompt !== "string" || !rule.citationPrompt.trim())) {
+    throw new ConfigError(`${at}.citationPrompt: must be a non-empty string`);
   }
 
   const levels = [
@@ -198,7 +198,7 @@ function resolveRule(
     suite: suiteName,
     name: ruleName,
     prompt: rule.prompt,
-    ...(rule.localizationPrompt ? { localizationPrompt: rule.localizationPrompt } : {}),
+    ...(rule.citationPrompt ? { citationPrompt: rule.citationPrompt } : {}),
     values: rule.values,
     model: model[0].model,
     modelAt: `${model[1]}.model`,

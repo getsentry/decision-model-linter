@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { type ContextValue, type Localization, type Model, type ResolvedRule, type Severity, DEFAULT_SEVERITY } from "./config.ts";
+import { type ContextValue, type Citation, type Model, type ResolvedRule, type Severity, DEFAULT_SEVERITY } from "./config.ts";
 import { collapseHiddenLines, linesToShow } from "./changed-lines.ts";
-import { localize, type LocalizationResult, type SourceLocation } from "./localize.ts";
+import { citeFindings, type CitationResult, type SourceLocation } from "./citation.ts";
 import { matchesAny } from "./files.ts";
 import { type Answer, type DecisionModel, type Question, type State, ModelError } from "./models.ts";
 
@@ -37,7 +37,7 @@ export interface Finding {
 
 export interface CallResult {
   /** Optional extraction pass; failure never removes or changes a decision finding. */
-  localization?: LocalizationResult;
+  citation?: CitationResult;
   suite: string;
   path: string;
   /** The rules asked in this call. */
@@ -63,7 +63,7 @@ export interface CallResult {
 }
 
 export interface LintOptions {
-  localization?: Localization;
+  citation?: Citation;
   cwd: string;
   /** The decision model for a configured model. */
   connect: (model: Model) => DecisionModel;
@@ -119,7 +119,7 @@ export async function lint(
   const contexts = new Map<ContextValue, Map<string, Promise<string>>>();
   const deps = {
     cwd,
-    localization: options.localization,
+    citation: options.citation,
     contexts,
     model: (model: Model) => {
       const key = modelKey(model);
@@ -186,7 +186,7 @@ async function lintOne(
   job: Job,
   deps: {
     cwd: string;
-    localization?: Localization;
+    citation?: Citation;
     contexts: Map<ContextValue, Map<string, Promise<string>>>;
     model: (model: Model) => DecisionModel;
   },
@@ -205,7 +205,7 @@ async function lintOne(
     provider: model.provider,
   };
   try {
-    await ask(job, result, deps.model(model), await resolveContext(rules[0].context, path, deps.contexts), deps.cwd, deps.localization);
+    await ask(job, result, deps.model(model), await resolveContext(rules[0].context, path, deps.contexts), deps.cwd, deps.citation);
   } catch (error) {
     result.error = (error as Error).message;
   }
@@ -217,7 +217,7 @@ async function lintOne(
 
 /** Sends the file and its rules' questions, filling in `result`. */
 async function ask(
-  job: Job, result: CallResult, client: DecisionModel, context: State, cwd: string, localization?: Localization,
+  job: Job, result: CallResult, client: DecisionModel, context: State, cwd: string, citation?: Citation,
 ): Promise<void> {
   const { path, rules, changed } = job;
   const content = await readFile(join(cwd, path), "utf8");
@@ -250,8 +250,8 @@ async function ask(
         result.answers[rule.name] = probabilities(rule, decision.answers[rule.name]);
         result.findings.push(...findings(rule, path, result.answers[rule.name]));
       }
-      if (localization && result.findings.length) {
-        result.localization = await localize(content, result.findings, rules, changed, localization);
+      if (citation && result.findings.length) {
+        result.citation = await citeFindings(content, result.findings, rules, changed, citation);
       }
       return;
     } catch (error) {
