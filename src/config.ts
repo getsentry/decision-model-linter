@@ -21,13 +21,8 @@ export interface Model {
   url?: string;
 }
 
-/** Optional second pass that extracts evidence spans with Cloudflare Clairic. */
-export interface Citation {
-  /** Full Workers AI run endpoint for @cf/cloudflare/clairic. */
-  url: string;
-  apiKey: string | undefined;
-  /** Conservative input budget, including the source and extraction fields. */
-  maxInputTokens: number;
+/** Optional second pass that extracts evidence spans through OpenRouter. */
+export interface Citation extends Model {
   /** Minimum extraction confidence; independent of the rule's decision threshold. Default 0.7. */
   threshold?: number;
 }
@@ -132,16 +127,8 @@ export function resolveConfig(raw: unknown, only: readonly string[] = []): { rul
   if (raw.citation !== undefined) {
     const value = raw.citation;
     if (!isObject(value)) throw new ConfigError("config.citation: must be an object");
-    checkKeys(value, "config.citation", ["url", "apiKey", "maxInputTokens", "threshold"]);
-    if (typeof value.url !== "string" || !URL.canParse(value.url) || !["http:", "https:"].includes(new URL(value.url).protocol)) {
-      throw new ConfigError("config.citation.url: must be an HTTP URL");
-    }
-    if (value.apiKey !== undefined && typeof value.apiKey !== "string") {
-      throw new ConfigError("config.citation.apiKey: must be a string");
-    }
-    if (!Number.isInteger(value.maxInputTokens) || value.maxInputTokens < 1) {
-      throw new ConfigError("config.citation.maxInputTokens: must be a positive integer");
-    }
+    const { threshold, ...model } = value;
+    checkModel(model, "config.citation");
     if (value.threshold !== undefined) checkThreshold(value.threshold, "config.citation.threshold");
   }
   const { concurrency = DEFAULT_CONCURRENCY } = raw;

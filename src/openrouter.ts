@@ -3,6 +3,19 @@
 import { type Answer, type DecisionModel, type Question, ModelError } from "./models.ts";
 
 export const DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
+export const EXTRACTIONS_URL = "https://openrouter.ai/api/alpha/extractions";
+
+/** Typed extraction through the same OpenRouter account used for decisions. */
+export async function openRouterExtract(
+  options: { name: string; apiKey: string | undefined; url?: string },
+  state: string,
+  fields: Record<string, object>,
+): Promise<any> {
+  return post(
+    options.url ?? EXTRACTIONS_URL, options.apiKey ?? "",
+    JSON.stringify({ model: options.name, state, fields }), 30_000, 0,
+  );
+}
 
 const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 

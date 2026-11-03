@@ -85,24 +85,34 @@ npm install --save-dev @sentry/decision-model-linter
 
 Detection still uses the configured decision model. An optional second pass uses
 [Cloudflare Clairic](https://developers.cloudflare.com/workers-ai/models/clairic/)
-to extract evidence for findings that reached their reporting threshold:
+through [OpenRouter's extractions API](https://openrouter.ai/docs/client-sdks/typescript/sdks/extractions/README)
+to extract evidence for findings that reached their reporting threshold. Configure
+Clairic as a `Model`, just like Jev, using the same OpenRouter API key:
 
 ```ts
+const clairic = {
+  provider: "openrouter",
+  name: "cloudflare/clairic",
+  apiKey: process.env.OPENROUTER_API_KEY,
+  maxInputTokens: 8192,
+} satisfies Model;
+
 export default {
   model: jev,
-  citation: {
-    url: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run/@cf/cloudflare/clairic`,
-    apiKey: process.env.CLOUDFLARE_API_TOKEN,
-    maxInputTokens: 8192,
-    threshold: 0.7,
-  },
+  citation: { ...clairic, threshold: 0.7 },
   suites: { security },
 } satisfies Config;
 ```
 
-Use a Cloudflare API token with Workers AI access. `citation` is configured
-once on the root config; omitting it keeps the existing behavior. An explicitly
-configured citation pass requires a nonempty key, like a decision model.
+No separate Cloudflare account, token, or service integration is needed.
+`citation` is configured once on the root config; omitting it keeps the existing
+behavior. It accepts the same `Model` fields as detection, plus `threshold`;
+`url` optionally overrides the OpenRouter extractions endpoint for testing.
+The extractions API is currently alpha. Although the SDK documentation lists
+`cloudflare/clairic`, a development smoke test returned `400: Model
+cloudflare/clairic does not exist`. Verify model availability for your OpenRouter
+account before enabling citation. An explicitly configured citation pass requires
+a nonempty key, like a decision model.
 `threshold` is the minimum extraction confidence and defaults to 0.7; it does not
 change the decision threshold. `maxInputTokens` budgets the source and extraction
 fields using the same conservative character estimate as detection.
