@@ -21,6 +21,17 @@ export interface Model {
   url?: string;
 }
 
+/** Optional second pass that extracts evidence spans with Cloudflare Clairic. */
+export interface Localization {
+  /** Full Workers AI run endpoint for @cf/cloudflare/clairic. */
+  url: string;
+  apiKey: string | undefined;
+  /** Conservative input budget, including the source and extraction fields. */
+  maxInputTokens: number;
+  /** Minimum extraction confidence; independent of the rule's decision threshold. Default 0.7. */
+  threshold?: number;
+}
+
 /** Extra state for a rule's calls: a string, or a function of the file called once per file. */
 export type ContextValue = string | ((file: { path: string }) => string | Promise<string>);
 
@@ -46,6 +57,8 @@ export interface Value {
 
 /** A question the model answers about each file the rule matches, and its possible answers. */
 export interface Rule extends Settings {
+  /** Additional evidence extraction instruction for this rule. */
+  localizationPrompt?: string;
   prompt: string;
   values: Value[];
 }
@@ -57,12 +70,14 @@ export interface Suite extends Settings {
 
 /** A repository's config: its suites, defaults for their rules, and how many calls run at once. */
 export interface Config extends Settings {
+  localization?: Localization;
   concurrency?: number;
   suites: Record<string, Suite>;
 }
 
 /** A rule with every setting resolved; `modelAt` is the path of the setting its model came from. */
 export interface ResolvedRule {
+  localizationPrompt?: string;
   suite: string;
   name: string;
   prompt: string;
@@ -94,7 +109,7 @@ export class ConfigError extends Error {}
 export async function loadConfig(
   path: string,
   only: readonly string[] = [],
-): Promise<{ rules: ResolvedRule[]; concurrency: number }> {
+): Promise<{ rules: ResolvedRule[]; concurrency: number; localization?: Localization }> {
   let module;
   try {
     module = await import(pathToFileURL(resolve(path)).href);
@@ -106,10 +121,25 @@ export async function loadConfig(
 }
 
 /** Checks a config's default export and resolves every rule's settings. */
-export function resolveConfig(raw: unknown, only: readonly string[] = []): { rules: ResolvedRule[]; concurrency: number } {
+export function resolveConfig(raw: unknown, only: readonly string[] = []): { rules: ResolvedRule[]; concurrency: number; localization?: Localization } {
   if (!isObject(raw)) throw new ConfigError("config: must default-export an object");
-  checkKeys(raw, "config", [...SETTING_KEYS, "concurrency", "suites"]);
+  checkKeys(raw, "config", [...SETTING_KEYS, "concurrency", "suites", "localization"]);
   checkSettings(raw, "config");
+  if (raw.localization !== undefined) {
+    const value = raw.localization;
+    if (!isObject(value)) throw new ConfigError("config.localization: must be an object");
+    checkKeys(value, "config.localization", ["url", "apiKey", "maxInputTokens", "threshold"]);
+    if (typeof value.url !== "string" || !URL.canParse(value.url) || !["http:", "https:"].includes(new URL(value.url).protocol)) {
+      throw new ConfigError("config.localization.url: must be an HTTP URL");
+    }
+    if (value.apiKey !== undefined && typeof value.apiKey !== "string") {
+      throw new ConfigError("config.localization.apiKey: must be a string");
+    }
+    if (!Number.isInteger(value.maxInputTokens) || value.maxInputTokens < 1) {
+      throw new ConfigError("config.localization.maxInputTokens: must be a positive integer");
+    }
+    if (value.threshold !== undefined) checkThreshold(value.threshold, "config.localization.threshold");
+  }
   const { concurrency = DEFAULT_CONCURRENCY } = raw;
   if (!Number.isInteger(concurrency) || concurrency < 1) {
     throw new ConfigError("config.concurrency: must be a positive integer");
@@ -134,7 +164,7 @@ export function resolveConfig(raw: unknown, only: readonly string[] = []): { rul
       if (!only.length || only.includes(suiteName)) rules.push(resolved);
     }
   }
-  return { rules, concurrency };
+  return { rules, concurrency, ...(raw.localization ? { localization: raw.localization } : {}) };
 }
 
 /** Checks one rule and resolves its settings from the rule, then its suite, then the config. */
@@ -147,9 +177,12 @@ function resolveRule(
 ): ResolvedRule {
   const at = `suites.${suiteName}.rules.${ruleName}`;
   if (!isObject(rule)) throw new ConfigError(`${at}: must be an object`);
-  checkKeys(rule, at, [...SETTING_KEYS, "prompt", "values"]);
+  checkKeys(rule, at, [...SETTING_KEYS, "prompt", "values", "localizationPrompt"]);
   checkSettings(rule, at);
   checkQuestion(rule, at);
+  if (rule.localizationPrompt !== undefined && (typeof rule.localizationPrompt !== "string" || !rule.localizationPrompt.trim())) {
+    throw new ConfigError(`${at}.localizationPrompt: must be a non-empty string`);
+  }
 
   const levels = [
     [rule, at],
@@ -165,6 +198,7 @@ function resolveRule(
     suite: suiteName,
     name: ruleName,
     prompt: rule.prompt,
+    ...(rule.localizationPrompt ? { localizationPrompt: rule.localizationPrompt } : {}),
     values: rule.values,
     model: model[0].model,
     modelAt: `${model[1]}.model`,
@@ -255,7 +289,7 @@ function checkSeverity(value: unknown, at: string): void {
 
 /** Throws unless `value` is a number in [0, 1]. */
 function checkThreshold(value: unknown, at: string): void {
-  if (typeof value !== "number" || value < 0 || value > 1) throw new ConfigError(`${at}: must be a number in [0, 1]`);
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) throw new ConfigError(`${at}: must be a number in [0, 1]`);
 }
 
 /** Throws unless `value` is a list of strings, and a non-empty one when `nonEmpty`. */
