@@ -17,7 +17,7 @@ on:
 
 jobs:
   release:
-    uses: getsentry/craft/.github/workflows/release.yml@v2
+    uses: getsentry/craft/.github/workflows/release.yml@v3
     with:
       version: ${{ inputs.version }}
       force: ${{ inputs.force }}
