@@ -52,8 +52,6 @@ export interface Value {
 
 /** A question the model answers about each file the rule matches, and its possible answers. */
 export interface Rule extends Settings {
-  /** Additional evidence extraction instruction for this rule. */
-  citationPrompt?: string;
   prompt: string;
   values: Value[];
 }
@@ -72,7 +70,6 @@ export interface Config extends Settings {
 
 /** A rule with every setting resolved; `modelAt` is the path of the setting its model came from. */
 export interface ResolvedRule {
-  citationPrompt?: string;
   suite: string;
   name: string;
   prompt: string;
@@ -164,12 +161,9 @@ function resolveRule(
 ): ResolvedRule {
   const at = `suites.${suiteName}.rules.${ruleName}`;
   if (!isObject(rule)) throw new ConfigError(`${at}: must be an object`);
-  checkKeys(rule, at, [...SETTING_KEYS, "prompt", "values", "citationPrompt"]);
+  checkKeys(rule, at, [...SETTING_KEYS, "prompt", "values"]);
   checkSettings(rule, at);
   checkQuestion(rule, at);
-  if (rule.citationPrompt !== undefined && (typeof rule.citationPrompt !== "string" || !rule.citationPrompt.trim())) {
-    throw new ConfigError(`${at}.citationPrompt: must be a non-empty string`);
-  }
 
   const levels = [
     [rule, at],
@@ -185,7 +179,6 @@ function resolveRule(
     suite: suiteName,
     name: ruleName,
     prompt: rule.prompt,
-    ...(rule.citationPrompt ? { citationPrompt: rule.citationPrompt } : {}),
     values: rule.values,
     model: model[0].model,
     modelAt: `${model[1]}.model`,

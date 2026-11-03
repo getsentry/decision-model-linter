@@ -36,7 +36,7 @@ function stub(output: unknown, status = 200) {
 
 async function run(options: { changed?: Set<number>; citation?: Citation; yes?: number } = {}) {
   const cwd = await tree({ "a.py": source });
-  return lint([rule("query", { citationPrompt: "Select query.get calls." })], ["a.py"], {
+  return lint([rule("query", { prompt: "Does this file read query parameters with query.get?" })], ["a.py"], {
     cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: options.yes ?? 0.9 })),
     citation: options.citation ?? citation,
     newLines: options.changed ? new Map([["a.py", options.changed]]) : undefined,
@@ -52,7 +52,7 @@ test("extracts repeated evidence with CRLF coordinates and filters to changed li
   assert.equal(sent.length, 1);
   assert.equal(sent[0].state, source);
   assert.equal(sent[0].model, "cloudflare/clairic");
-  assert.match(sent[0].fields.f0.instructions, /Select query.get calls/);
+  assert.match(sent[0].fields.f0.instructions, /Does this file read query parameters with query.get/);
   assert.match(sent[0].fields.f0.instructions, /changed source lines.*2/);
   assert.deepEqual(results[0].findings[0].locations, [{ line: 2, endLine: 2, col: 7, endColumn: 22 }]);
   assert.deepEqual(results[0].citation, { calls: 1, inputTokens: 120, outputTokens: 0 });
