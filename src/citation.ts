@@ -1,6 +1,6 @@
 import type { Citation, ResolvedRule } from "./config.ts";
 import type { Finding } from "./evaluate.ts";
-import { openRouterExtract } from "./openrouter.ts";
+import { openRouter } from "./openrouter.ts";
 
 /** One-based source coordinates, with an inclusive end, as GitHub annotations expect. */
 export interface SourceLocation {
@@ -52,7 +52,7 @@ export async function citeFindings(
   }
   const result: CitationResult = { calls: 1 };
   try {
-    const output = await openRouterExtract(options, source, fields);
+    const output = await openRouter({ ...options, apiKey: options.apiKey ?? "" }).extract(source, fields);
     const tokens = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
     result.inputTokens = tokens(output.usage?.input_tokens);
     result.outputTokens = tokens(output.usage?.output_tokens);
