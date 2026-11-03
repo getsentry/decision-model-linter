@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
-import { resolveConfig, type Localization } from "../src/config.ts";
+import { resolveConfig, type Citation } from "../src/config.ts";
 import { lint } from "../src/evaluate.ts";
 import { main } from "../src/cli.ts";
-import { validatedOffsets } from "../src/localize.ts";
+import { validatedOffsets } from "../src/citation.ts";
 import { exitCode, format } from "../src/report.ts";
 import { FakeModel, MODEL, configSource, rule, tree } from "./helpers.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
-const localization: Localization = {
+const citation: Citation = {
   url: "https://api.cloudflare.com/client/v4/accounts/example/ai/run/@cf/cloudflare/clairic",
-  apiKey: "localization-test-key",
+  apiKey: "citation-test-key",
   maxInputTokens: 8192,
 };
 const source = "old = query.get('old')\r\nnew = query.get('new')\r\n";
@@ -33,11 +33,11 @@ function stub(output: unknown, status = 200) {
   return sent;
 }
 
-async function run(options: { changed?: Set<number>; localization?: Localization; yes?: number } = {}) {
+async function run(options: { changed?: Set<number>; citation?: Citation; yes?: number } = {}) {
   const cwd = await tree({ "a.py": source });
-  return lint([rule("query", { localizationPrompt: "Select query.get calls." })], ["a.py"], {
+  return lint([rule("query", { citationPrompt: "Select query.get calls." })], ["a.py"], {
     cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: options.yes ?? 0.9 })),
-    localization: options.localization ?? localization,
+    citation: options.citation ?? citation,
     newLines: options.changed ? new Map([["a.py", options.changed]]) : undefined,
   });
 }
@@ -54,9 +54,9 @@ test("extracts repeated evidence with CRLF coordinates and filters to changed li
   assert.match(sent[0].fields.f0.instructions, /Select query.get calls/);
   assert.match(sent[0].fields.f0.instructions, /changed source lines.*2/);
   assert.deepEqual(results[0].findings[0].locations, [{ line: 2, endLine: 2, col: 7, endColumn: 22 }]);
-  assert.deepEqual(results[0].localization, { calls: 1, inputTokens: 120, outputTokens: 0 });
+  assert.deepEqual(results[0].citation, { calls: 1, inputTokens: 120, outputTokens: 0 });
   assert.match(format(results, "github"), /file=a.py,line=2,endLine=2,col=7,endColumn=22/);
-  assert.match(format(results, "github"), /localization: 1 calls, 120 input tokens/);
+  assert.match(format(results, "github"), /citation: 1 calls, 120 input tokens/);
   assert.equal(exitCode(results), 0);
 });
 
@@ -69,13 +69,13 @@ test("emits an annotation per occurrence, omitting columns for multiline spans",
   assert.match(annotations[2], /line=1,endLine=2,title=/);
 });
 
-test("localization is skipped for clean files and inputs over budget", async () => {
+test("citation is skipped for clean files and inputs over budget", async () => {
   const sent = stub({});
   const clean = await run({ yes: 0.1 });
-  assert.equal(clean[0].localization, undefined);
-  const large = await run({ localization: { ...localization, maxInputTokens: 1 } });
-  assert.equal(large[0].localization?.calls, 0);
-  assert.match(large[0].localization!.error!, /budget/);
+  assert.equal(clean[0].citation, undefined);
+  const large = await run({ citation: { ...citation, maxInputTokens: 1 } });
+  assert.equal(large[0].citation?.calls, 0);
+  assert.match(large[0].citation!.error!, /budget/);
   assert.equal(large[0].findings.length, 1);
   assert.equal(large[0].unchecked, undefined);
   assert.equal(sent.length, 0);
@@ -88,20 +88,20 @@ for (const [name, output, status] of [
   ["different state", { state_text: "different", answers: { f0: evidence(source, [source]) } }, 200],
   ["missing answers", {}, 200],
 ] as const) {
-  test(`${name} preserves the decision and reports a safe localization diagnostic`, async () => {
+  test(`${name} preserves the decision and reports a safe citation diagnostic`, async () => {
     stub(output, status);
     const cwd = await tree({ "a.py": source });
     const results = await lint([rule("query", {
       values: [{ value: "TRUE", severity: "error", report: "Fix." }, { value: "FALSE" }],
     })], ["a.py"], {
-      cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: 0.9 })), localization,
+      cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: 0.9 })), citation,
     });
     assert.equal(results[0].findings.length, 1);
     assert.equal(results[0].findings[0].locations, undefined);
     assert.equal(results[0].unchecked, undefined);
     assert.equal(exitCode(results), 1);
-    assert.ok(results[0].localization?.error);
-    assert.doesNotMatch(JSON.stringify(results), /private|localization-test-key/);
+    assert.ok(results[0].citation?.error);
+    assert.doesNotMatch(JSON.stringify(results), /private|citation-test-key/);
     assert.match(format(results, "github"), /retaining file-level findings/);
   });
 }
@@ -136,36 +136,36 @@ test("Unicode offsets map to character columns", async () => {
   stub({ answers: { f0: { type: "list", value: ["target😀"], spans: [[2, 9]], confidence: 0.99 } } });
   const cwd = await tree({ "a.py": content });
   const results = await lint([rule("query")], ["a.py"], {
-    cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: 0.9 })), localization,
+    cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: 0.9 })), citation,
   });
   assert.deepEqual(results[0].findings[0].locations, [{ line: 1, col: 3, endLine: 1, endColumn: 9 }]);
 });
 
-test("config resolves localization and a missing extraction key fails before model calls", async () => {
+test("config resolves citation and a missing extraction key fails before model calls", async () => {
   // Use config-file source so normal CLI loading and validation are exercised together.
-  const source = configSource().replace("export default {", `export default { localization: ${JSON.stringify({ ...localization, apiKey: "" })},`);
+  const source = configSource().replace("export default {", `export default { citation: ${JSON.stringify({ ...citation, apiKey: "" })},`);
   const cwd = await tree({ "decision-model-linter.config.ts": source, "a.py": "x" });
   let error = "";
   const client = new FakeModel();
   const code = await main(["a.py"], { cwd, write: () => {}, writeError: (text) => { error += text; }, connect: () => client });
   assert.equal(code, 2);
-  assert.match(error, /config.localization.apiKey/);
+  assert.match(error, /config.citation.apiKey/);
   assert.equal(client.calls.length, 0);
   // Config validation rejects unknown fields and invalid limits without revealing values.
   const minimal = { model: MODEL, files: ["*.py"], suites: { api: { rules: { f: { prompt: "Q?", values: [{ value: "TRUE", report: "Fix" }, { value: "FALSE" }] } } } } };
-  assert.deepEqual(resolveConfig({ ...minimal, localization }).localization, localization);
-  for (const invalid of [{ ...localization, maxInputTokens: 0 }, { ...localization, threshold: 2 }, { ...localization, url: "file:///tmp/x" }, { ...localization, unknown: true }]) {
-    assert.throws(() => resolveConfig({ ...minimal, localization: invalid }), /config.localization/);
+  assert.deepEqual(resolveConfig({ ...minimal, citation }).citation, citation);
+  for (const invalid of [{ ...citation, maxInputTokens: 0 }, { ...citation, threshold: 2 }, { ...citation, url: "file:///tmp/x" }, { ...citation, unknown: true }]) {
+    assert.throws(() => resolveConfig({ ...minimal, citation: invalid }), /config.citation/);
   }
 });
 
-test("CLI forwards localization config and batches findings into one extraction request", async () => {
+test("CLI forwards citation config and batches findings into one extraction request", async () => {
   const sent = stub({ answers: {
     f0: evidence(source, ["query.get('old')"]),
     f1: evidence(source, ["query.get('new')"]),
   } });
   const config = {
-    model: MODEL, localization, files: ["*.py"], suites: { api: { rules: {
+    model: MODEL, citation, files: ["*.py"], suites: { api: { rules: {
       old: { prompt: "Old query?", values: [{ value: "TRUE", report: "Old." }, { value: "FALSE" }] },
       new: { prompt: "New query?", values: [{ value: "TRUE", report: "New." }, { value: "FALSE" }] },
     } } },
@@ -188,6 +188,6 @@ test("network failures leave file findings intact", async () => {
   const results = await run();
   assert.equal(results[0].findings.length, 1);
   assert.equal(results[0].unchecked, undefined);
-  assert.match(results[0].localization!.error!, /request failed/);
+  assert.match(results[0].citation!.error!, /request failed/);
   assert.doesNotMatch(JSON.stringify(results), /private/);
 });
