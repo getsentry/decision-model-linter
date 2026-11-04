@@ -55,12 +55,14 @@ export default {
 
 ### Settings
 
-Rule settings can be set on the config, a suite, or a rule. The nearest level wins, except `context`, which merges by name.
+Rule settings can be set on the config, a suite, or a rule. The nearest level wins, except:
+- `context` merges by name.
+- `ignores` adds up, in the order config, suite, rule, the way nested `.gitignore` files do. A glob starting with `!` lints a path again, and the last glob that matches a path decides. So a config can ignore generated files for every suite, and one rule can still check one of them with `!`.
 
 | Setting | Meaning |
 |---|---|
 | `model` | `{ provider, name, apiKey, maxInputTokens, url? }`. `openrouter` is the only provider so far. The config reads `apiKey` from the environment. `maxInputTokens` caps one call: the file, its context, and the questions together. |
-| `files`, `ignores` | Globs relative to the working directory; `**` crosses directories. |
+| `files`, `ignores` | Globs relative to the working directory; `**` crosses directories. A rule lints a path that matches `files` and is not ignored. |
 | `context` | Named extra state for the model: strings, or functions of `{ path }` called once per file. `path` and `content` are reserved for the file. |
 | `threshold` | The probability an answer must reach to be reported. Default 0.7. |
 | `unchecked` | `"warn"` or `"error"`: how a file is reported when a call fails or the file is cut to fit. Default `"warn"`. |

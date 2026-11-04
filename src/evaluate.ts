@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { type ContextValue, type Model, type ResolvedRule, type Severity, DEFAULT_SEVERITY } from "./config.ts";
 import { collapseHiddenLines, linesToShow } from "./changed-lines.ts";
-import { matchesAny } from "./files.ts";
+import { isIgnored, matchesAny } from "./files.ts";
 import { type Answer, type DecisionModel, type Question, type State, ModelError } from "./models.ts";
 
 // Conservative: diffs and source measured ~3.8 characters per token, schema JSON ~5.8.
@@ -78,7 +78,7 @@ interface Job {
 
 /** Whether `rule` lints `path`. */
 function covers(rule: ResolvedRule, path: string): boolean {
-  return matchesAny(path, rule.files) && !matchesAny(path, rule.ignores);
+  return matchesAny(path, rule.files) && !isIgnored(path, rule.ignores);
 }
 
 /** Whether any rule lints `path`. */
