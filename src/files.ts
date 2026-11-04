@@ -37,6 +37,12 @@ export function matchesAny(path: string, patterns: readonly string[]): boolean {
   return patterns.some((pattern) => globToRegExp(pattern).test(path));
 }
 
+/** Whether `path` is ignored: the last glob it matches decides, and a `!` glob lints it again. */
+export function isIgnored(path: string, ignores: readonly string[]): boolean {
+  const last = ignores.findLast((glob) => globToRegExp(glob.replace(/^!/, "")).test(path));
+  return last !== undefined && !last.startsWith("!");
+}
+
 /** Resolves file paths, directories, and globs to sorted, unique paths relative to `cwd`. */
 export async function resolveTargets(targets: readonly string[], cwd: string): Promise<string[]> {
   const found = new Set<string>();

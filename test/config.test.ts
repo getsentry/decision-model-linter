@@ -55,6 +55,23 @@ test("the nearest level wins and context merges by name", () => {
   assert.deepEqual(strict.context, { schema, owners: "b", extra: "c" });
 });
 
+test("ignores add up from the config to the rule", () => {
+  const { rules } = resolveConfig({
+    model,
+    files: ["src/**"],
+    ignores: ["src/generated/**"],
+    suites: {
+      security: {
+        ignores: ["src/migrations/**"],
+        rules: { broad: rule, strict: { ...rule, ignores: ["!src/generated/schema.py"] } },
+      },
+    },
+  });
+  const [broad, strict] = rules;
+  assert.deepEqual(broad.ignores, ["src/generated/**", "src/migrations/**"]);
+  assert.deepEqual(strict.ignores, ["src/generated/**", "src/migrations/**", "!src/generated/schema.py"]);
+});
+
 test("--suite selects suites, and an unknown one fails", () => {
   const config = { model, files: ["*.py"], suites: { api: { rules: { f: rule } }, security: { rules: { g: rule } } } };
   assert.deepEqual(resolveConfig(config, ["security"]).rules.map((r) => r.name), ["g"]);

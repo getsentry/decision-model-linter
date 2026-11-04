@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { resolveConfig } from "../src/config.ts";
 import { WHOLE_FILE_INSTRUCTIONS, lint } from "../src/evaluate.ts";
 import { type DecisionModel, ModelError } from "../src/models.ts";
 import { FakeModel, MODEL, rule, tree } from "./helpers.ts";
@@ -45,6 +46,31 @@ test("an overridden context or model splits a rule into its own call, and suites
       ["api", ["c"]],
       ["api", ["d"]],
       ["security", ["e"]],
+    ],
+  );
+});
+
+test("the config's ignores reach suites and rules with their own, and ! lints a path again", async () => {
+  const yesNo = { prompt: "Q?", values: [{ value: "TRUE", report: "Fix." }, { value: "FALSE" }] };
+  const { rules } = resolveConfig({
+    model: MODEL,
+    files: ["src/**/*.py"],
+    ignores: ["src/generated_*"],
+    suites: {
+      security: {
+        ignores: ["src/migrations/**"],
+        rules: { scoped: yesNo, schema: { ...yesNo, ignores: ["!src/generated_schema.py"] } },
+      },
+    },
+  });
+  const paths = ["src/app.py", "src/generated_stubs.py", "src/generated_schema.py", "src/migrations/0001.py"];
+  const cwd = await tree(Object.fromEntries(paths.map((path) => [path, "x"])));
+  const results = await lint(rules, paths, { cwd, connect: () => new FakeModel() });
+  assert.deepEqual(
+    results.map((r) => [r.path, r.rules]),
+    [
+      ["src/app.py", ["scoped", "schema"]],
+      ["src/generated_schema.py", ["schema"]],
     ],
   );
 });

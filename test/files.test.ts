@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 
-import { matchesAny, resolveTargets } from "../src/files.ts";
+import { isIgnored, matchesAny, resolveTargets } from "../src/files.ts";
 
 test("globs", () => {
   assert.ok(matchesAny("src/sentry/api/endpoints/x.py", ["src/sentry/**/*.py"]));
@@ -12,6 +12,14 @@ test("globs", () => {
   assert.ok(matchesAny("src/a/tests/b.py", ["**/tests/**"]));
   assert.ok(!matchesAny("src/sentry/x.ts", ["src/sentry/**/*.py"]));
   assert.ok(!matchesAny("src/sentry/api/x.py", ["src/sentry/*.py"]));
+});
+
+test("the last ignore that matches decides, and ! lints a path again", () => {
+  const ignores = ["src/generated/**", "!src/generated/schema.py", "src/generated/schema.py"];
+  assert.ok(!isIgnored("src/app.py", ignores));
+  assert.ok(isIgnored("src/generated/types.py", ignores));
+  assert.ok(!isIgnored("src/generated/schema.py", ignores.slice(0, 2)));
+  assert.ok(isIgnored("src/generated/schema.py", ignores));
 });
 
 test("targets mix files, directories, and globs", async () => {

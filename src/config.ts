@@ -24,10 +24,14 @@ export interface Model {
 /** Extra state for a rule's calls: a string, or a function of the file called once per file. */
 export type ContextValue = string | ((file: { path: string }) => string | Promise<string>);
 
-/** Settings the config, a suite, or a rule may set; the nearest wins, and `context` merges by name. */
+/**
+ * Settings the config, a suite, or a rule may set. The nearest wins, except `context`, which merges
+ * by name, and `ignores`, which adds up from the config to the rule.
+ */
 export interface Settings {
   model?: Model;
   files?: string[];
+  /** Globs to skip; one starting with `!` lints a path again, and the last glob that matches wins. */
   ignores?: string[];
   context?: Record<string, ContextValue>;
   threshold?: number;
@@ -169,7 +173,7 @@ function resolveRule(
     model: model[0].model,
     modelAt: `${model[1]}.model`,
     files,
-    ignores: nearest("ignores")?.[0].ignores ?? [],
+    ignores: [config, suite, rule].flatMap((level) => level.ignores ?? []),
     context: { ...config.context, ...suite.context, ...rule.context },
     threshold: nearest("threshold")?.[0].threshold ?? DEFAULT_THRESHOLD,
     unchecked: nearest("unchecked")?.[0].unchecked ?? DEFAULT_SEVERITY,
