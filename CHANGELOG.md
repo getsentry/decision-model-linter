@@ -1,4 +1,15 @@
 # Changelog
+## 0.3.0
+
+### Breaking Changes 🛠
+
+- Add up ignores from the config, suite, and rule by @sentry-junior in [#8](https://github.com/getsentry/decision-model-linter/pull/8)
+
+### Documentation 📚
+
+- Say so when the override label passes an unfinished lint by @azulus in [#5](https://github.com/getsentry/decision-model-linter/pull/5)
+- Re-run the example lint on every label change by @azulus in [#4](https://github.com/getsentry/decision-model-linter/pull/4)
+
 ## 0.2.0
 
 ### Breaking Changes 🛠
