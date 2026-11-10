@@ -1,6 +1,6 @@
 import type { Citation, ResolvedRule } from "./config.ts";
 import type { Finding, SourceLocation } from "./evaluate.ts";
-import type { Question } from "./models.ts";
+import type { Question, State } from "./models.ts";
 import { openRouter } from "./openrouter.ts";
 
 /** Kept separate from decision usage: citation failure is not a failed lint decision. */
@@ -13,12 +13,13 @@ export interface CitationResult {
 
 /** Enriches findings in place with one representative source line each. */
 export async function citeFindings(
-  source: string,
+  state: State,
   findings: Finding[],
   rules: readonly ResolvedRule[],
   changed: ReadonlySet<number> | undefined,
   options: Citation,
 ): Promise<CitationResult> {
+  const source = state.content;
   const choices: Record<string, string> = { none: "No source line supports the reported answer and finding." };
   const locations = new Map<string, SourceLocation>();
   for (const [index, raw] of source.split("\n").entries()) {
@@ -45,7 +46,6 @@ export async function citeFindings(
       options: choices,
     }];
   }));
-  const state = { content: source };
   if (JSON.stringify(state).length + JSON.stringify(questions).length + 512 > options.maxInputTokens * 3) {
     return { calls: 0, error: "source and questions exceed the citation input budget" };
   }
@@ -61,6 +61,7 @@ export async function citeFindings(
       const probabilities = Object.entries(answer.probabilities);
       if (probabilities.length !== Object.keys(choices).length || probabilities.some(([id, probability]) =>
         !Object.hasOwn(choices, id) || !Number.isFinite(probability) || probability < 0 || probability > 1)) continue;
+      if (Math.abs(probabilities.reduce((sum, [, probability]) => sum + probability, 0) - 1) > 1e-6) continue;
       probabilities.sort((a, b) => b[1] - a[1]);
       const [id, probability] = probabilities[0];
       if (probability < (options.threshold ?? 0.7) || probabilities[1]?.[1] === probability) continue;

@@ -259,7 +259,7 @@ async function ask(
         result.findings.push(...findings(rule, path, result.answers[rule.name]));
       }
       if (citation && result.findings.length) {
-        result.citation = await citeFindings(content, result.findings, rules, changed, citation);
+        result.citation = await citeFindings({ ...state, content }, result.findings, rules, changed, citation);
       }
       return;
     } catch (error) {

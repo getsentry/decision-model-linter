@@ -8,19 +8,32 @@ import { fileURLToPath } from "node:url";
 assert.ok(process.env.OPENROUTER_API_KEY?.trim(), "Set OPENROUTER_API_KEY to run the live citation checks");
 const model = { provider: "openrouter", name: "typesafe/jev-1.13", maxInputTokens: 8192 };
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
-const cases = [
+const cases: {
+  name: string; path: string; source: string; prompt: string; report: string;
+  line: number | undefined; before?: string; context?: Record<string, string>;
+}[] = [
   { name: "declaration", path: "a.py", source: "def greet(name):\n    return name\n", prompt: "Does the code define a function without a return type annotation?", report: "Add a return type annotation.", line: 1 },
   { name: "print", path: "a.py", source: "def greet(name):\n    print(name)\n", prompt: "Does the code call print?", report: "Remove the print call.", line: 2 },
   { name: "sql", path: "a.py", source: 'def get_user(request, db):\n    user_id = request.args["id"]\n    return db.execute("SELECT * FROM users WHERE id = " + user_id)\n', prompt: "Does this code concatenate untrusted input into an SQL query?", report: "Use a parameterized SQL query.", line: 3 },
   { name: "unawaited", path: "a.js", source: "async function save(user) {\n  writeAudit(user);\n  await persist(user);\n}\n", prompt: "Does this code call writeAudit without awaiting it?", report: "Await writeAudit.", line: 2 },
   { name: "changed", path: "a.py", before: "print('old')\nvalue = 1\n", source: "print('old')\nprint('new')\n", prompt: "Does the code call print?", report: "Remove the print call.", line: 2 },
+  ...["call_a", "call_b"].map((forbidden, index) => ({
+    name: `context-${forbidden}`, path: "a.py", source: "call_a()\ncall_b()\n",
+    prompt: "Does this file call the function named in forbidden?", report: "Remove the forbidden function call.",
+    context: { forbidden }, line: index + 1,
+  })),
+  ...["call_a", "call_b"].map((name, index) => ({
+    name: `path-${name}`, path: `${name}.py`, source: "call_a()\ncall_b()\n",
+    prompt: "Does this file call a function with the same name as its file basename without the .py extension?",
+    report: "Remove the function call matching the file name.", line: index + 1,
+  })),
   { name: "clean", path: "a.py", source: "def greet(name):\n    return name\n", prompt: "Does the code call print?", report: "Remove the print call.", line: undefined },
 ];
 
 for (const fixture of cases) {
   const cwd = await mkdtemp(join(tmpdir(), "citation-live-"));
   try {
-    const config = { model, citation: model, suites: { smoke: { files: [fixture.path], unchecked: "error", rules: {
+    const config = { model, citation: model, context: fixture.context, suites: { smoke: { files: [fixture.path], unchecked: "error", rules: {
       violation: { prompt: fixture.prompt, values: [{ value: "TRUE", severity: "error", report: fixture.report }, { value: "FALSE" }] },
     } } } };
     await writeFile(join(cwd, "config.mjs"), `const config = ${JSON.stringify(config)}; config.model.apiKey = config.citation.apiKey = process.env.OPENROUTER_API_KEY; export default config;`);

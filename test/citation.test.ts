@@ -35,7 +35,7 @@ test("selects a real changed source line and emits a whole-line annotation", asy
   const results = await run({ changed: new Set([2]) });
   assert.equal(sent.length, 1);
   assert.equal(sent[0].url, "https://openrouter.ai/api/alpha/decisions");
-  assert.deepEqual(sent[0].body.state, { content: source });
+  assert.deepEqual(sent[0].body.state, { path: "a.py", content: source });
   assert.deepEqual(sent[0].body.questions.f0.criteria, { none: "No source line supports the reported answer and finding.", line_2: "Line 2: new = query.get('new')" });
   assert.match(sent[0].body.questions.f0.instructions, /Does this file read query parameters with query.get/);
   assert.deepEqual(results[0].findings[0].locations, [{ line: 2, endLine: 2, col: 1, endColumn: 22 }]);
@@ -78,6 +78,8 @@ for (const [name, probabilities] of [
   ["non-numeric probability", { none: 0, line_1: "0.9", line_2: 0.1 }],
   ["null probability", { none: 0, line_1: null, line_2: 0.9 }],
   ["empty probabilities", {}],
+  ["overfull probabilities", { none: 0.8, line_1: 0.9, line_2: 0.7 }],
+  ["underfull probabilities", { none: 0, line_1: 0.75, line_2: 0 }],
 ] as const) {
   test(`${name} retains the file-level finding`, async () => {
     stub({ answers: { f0: { probabilities } } });
@@ -87,6 +89,68 @@ for (const [name, probabilities] of [
     assert.equal(results[0].unchecked, undefined);
   });
 }
+
+test("rounded probabilities still select a confident line", async () => {
+  stub({ answers: { f0: { probabilities: { none: 0.0333333, line_1: 0.9333333, line_2: 0.0333333 } } } });
+  const results = await run();
+  assert.equal(results[0].findings[0].locations?.[0]?.line, 1);
+});
+
+test("citation uses resolved context and path to distinguish identical source", async () => {
+  const cwd = await tree({ "a.py": "call_a()\ncall_b()\n" });
+  for (const [forbidden, line] of [["call_a", 1], ["call_b", 2]] as const) {
+    let contextCalls = 0;
+    const sent: { state: Record<string, string> }[] = [];
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      sent.push(body);
+      const { state } = body;
+      return new Response(JSON.stringify({ answers: { f0: { probabilities: {
+        none: 0, line_1: state.forbidden === "call_a" ? 1 : 0, line_2: state.forbidden === "call_b" ? 1 : 0,
+      } } } }));
+    };
+    const results = await lint([rule("forbidden", {
+      prompt: "Does this file call the function named in forbidden?",
+      context: { forbidden: async ({ path }) => { contextCalls++; assert.equal(path, "a.py"); return forbidden; } },
+    })], ["a.py"], {
+      cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: 0.9 })), citation,
+    });
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].state.path, "a.py");
+    assert.equal(sent[0].state.forbidden, forbidden);
+    assert.equal(results[0].findings[0].locations?.[0]?.line, line);
+    assert.equal(contextCalls, 1);
+    assert.equal(results[0].unchecked, undefined);
+  }
+});
+
+test("citation budget includes resolved context", async () => {
+  const sent = stub({});
+  const cwd = await tree({ "a.py": source });
+  const results = await lint([rule("query", { context: { reference: "x".repeat(25_000) } })], ["a.py"], {
+    cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: 0.9 })), citation,
+  });
+  assert.equal(sent.length, 0);
+  assert.equal(results[0].citation?.calls, 0);
+  assert.match(results[0].citation!.error!, /budget/);
+  assert.equal(results[0].findings.length, 1);
+  assert.equal(results[0].unchecked, undefined);
+});
+
+test("a malformed distribution does not discard another finding's valid citation", async () => {
+  stub({ answers: {
+    f0: { probabilities: { none: 0.8, line_1: 0.9, line_2: 0.7 } },
+    f1: { probabilities: { none: 0.01, line_1: 0.01, line_2: 0.98 } },
+  } });
+  const cwd = await tree({ "a.py": source });
+  const results = await lint([rule("old"), rule("new")], ["a.py"], {
+    cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: 0.9 })), citation,
+  });
+  assert.equal(results[0].findings.length, 2);
+  assert.equal(results[0].findings[0].locations, undefined);
+  assert.equal(results[0].findings[1].locations?.[0]?.line, 2);
+  assert.equal(results[0].unchecked, undefined);
+});
 
 test("a tie remains file-level even when both lines exceed the threshold", async () => {
   stub({ answers: { f0: { probabilities: { none: 0, line_1: 0.5, line_2: 0.5 } } } });
