@@ -45,7 +45,7 @@ export function describeUsage(u: Usage): string {
   return parts.join(", ");
 }
 
-/** Decision usage and separately accounted optional extraction calls. */
+/** Decision usage and separately accounted optional citation calls. */
 function describeRunUsage(results: readonly CallResult[]): string {
   const passes = results.flatMap((call) => call.citation ? [call.citation] : []);
   const calls = passes.reduce((sum, pass) => sum + pass.calls, 0);

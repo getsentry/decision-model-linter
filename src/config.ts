@@ -21,9 +21,9 @@ export interface Model {
   url?: string;
 }
 
-/** Optional second pass that extracts evidence spans through OpenRouter. */
+/** Optional second pass that selects a source line through a decision model. */
 export interface Citation extends Model {
-  /** Minimum extraction confidence; independent of the rule's decision threshold. Default 0.7. */
+  /** Minimum line probability; independent of the rule's decision threshold. Default 0.7. */
   threshold?: number;
 }
 

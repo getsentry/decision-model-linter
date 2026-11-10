@@ -83,39 +83,28 @@ npm install --save-dev @sentry/decision-model-linter
 
 ## Optional source citations
 
-Use [Clairic through OpenRouter's extractions API](https://openrouter.ai/docs/client-sdks/typescript/sdks/extractions/README)
-to attach source locations to findings. Configure it as a `Model`, like Jev,
-using the same OpenRouter API key:
+Use a second decision pass to attach a source line to each finding. Configure
+`citation` as a `Model`; it can reuse the Jev model and OpenRouter API key:
 
 ```ts
-const clairic = {
-  provider: "openrouter",
-  name: "cloudflare/clairic",
-  apiKey: process.env.OPENROUTER_API_KEY,
-  maxInputTokens: 8192,
-} satisfies Model;
-
 export default {
   model: jev,
-  citation: { ...clairic, threshold: 0.7 },
+  citation: { ...jev, threshold: 0.7 },
   suites: { security },
 } satisfies Config;
 ```
 
-No separate Cloudflare account or credential is needed. The extractions API is
-alpha, and `cloudflare/clairic` availability is not verified. Confirm availability
-for your OpenRouter account before enabling citation.
-
 `citation` is optional and configured on the root config. It accepts the `Model`
-fields plus an extraction confidence `threshold` (default 0.7), independent of the
-decision threshold. Its API key must be nonempty; `url` can override the extraction
-endpoint. Each flagged decision call batches its findings into one extraction
-request, using the source, rule questions, and reported answers as evidence criteria.
+fields plus a line probability `threshold` (default 0.7), independent of the rule's
+decision threshold. Its API key must be nonempty; `url` can override the decisions
+endpoint. Each flagged decision call batches its findings into one citation
+request. The model selects one representative source line per finding, or no
+evidence, using the source, rule questions, and reported answers.
 
-Validated source spans become `locations` in JSON output and line/column
-annotations with `--format github`. In changeset mode, evidence must overlap
-changed lines. Failed or inconclusive extraction leaves the original file-level
-finding, severity, and exit status intact. Inputs exceeding `maxInputTokens` are
+Selected lines become `locations` in JSON output and whole-line annotations with
+`--format github`. In changeset mode, only changed, nonblank lines can be selected.
+Failed, uncertain, or unsupported citations leave the original file-level finding,
+severity, and exit status intact. Inputs exceeding `maxInputTokens` are
 skipped rather than truncated; requests time out after 30 seconds without retries.
 Citation calls and input tokens are reported separately; the displayed decision
 cost excludes citation charges.
@@ -237,6 +226,13 @@ npm ci
 npm run typecheck
 npm test
 npm run build
+```
+
+To check source citations against live Jev requests using synthetic fixtures:
+
+```sh
+npm run build
+OPENROUTER_API_KEY=... node test/citation.live.ts
 ```
 
 The package ships compiled JavaScript, because Node does not run TypeScript from `node_modules`. To release, run the Release workflow with a version; craft prepares the release and publishes the tarball that CI built once the release is approved in `getsentry/publish`.

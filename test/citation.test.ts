@@ -4,38 +4,25 @@ import { afterEach, test } from "node:test";
 import { resolveConfig, type Citation } from "../src/config.ts";
 import { lint } from "../src/evaluate.ts";
 import { main } from "../src/cli.ts";
-import { validatedOffsets } from "../src/citation.ts";
 import { exitCode, format } from "../src/report.ts";
 import { FakeModel, MODEL, configSource, rule, tree } from "./helpers.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
-const citation: Citation = {
-  provider: "openrouter",
-  name: "cloudflare/clairic",
-  apiKey: "citation-test-key",
-  maxInputTokens: 8192,
-};
+const citation: Citation = { ...MODEL, name: "typesafe/jev-1.13", apiKey: "citation-test-key", maxInputTokens: 8192 };
 const source = "old = query.get('old')\r\nnew = query.get('new')\r\n";
 
-function evidence(state: string, values: string[], confidence = 0.95) {
-  return {
-    type: "list", confidence, value: values,
-    spans: values.map((value) => [state.indexOf(value), state.indexOf(value) + value.length]),
-  };
-}
-
 function stub(output: unknown, status = 200) {
-  const sent: any[] = [];
-  globalThis.fetch = async (_url, init) => {
-    sent.push(JSON.parse(String(init?.body)));
+  const sent: { url: string; body: any }[] = [];
+  globalThis.fetch = async (url, init) => {
+    sent.push({ url: String(url), body: JSON.parse(String(init?.body)) });
     return new Response(JSON.stringify(output), { status });
   };
   return sent;
 }
 
-async function run(options: { changed?: Set<number>; citation?: Citation; yes?: number } = {}) {
-  const cwd = await tree({ "a.py": source });
+async function run(options: { changed?: Set<number>; citation?: Citation; yes?: number; source?: string } = {}) {
+  const cwd = await tree({ "a.py": options.source ?? source });
   return lint([rule("query", { prompt: "Does this file read query parameters with query.get?" })], ["a.py"], {
     cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: options.yes ?? 0.9 })),
     citation: options.citation ?? citation,
@@ -43,37 +30,36 @@ async function run(options: { changed?: Set<number>; citation?: Citation; yes?: 
   });
 }
 
-test("extracts repeated evidence with CRLF coordinates and filters to changed lines", async () => {
-  const sent = stub({
-    state_text: source, answers: { f0: evidence(source, ["query.get('old')", "query.get('new')", "query.get('new')"]) },
-    usage: { input_tokens: 120, output_tokens: 0 }, truncated: false,
-  });
+test("selects a real changed source line and emits a whole-line annotation", async () => {
+  const sent = stub({ answers: { f0: { probabilities: { none: 0.05, line_2: 0.95 } } }, usage: { input_tokens: 120, output_tokens: 20 } });
   const results = await run({ changed: new Set([2]) });
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].state, source);
-  assert.equal(sent[0].model, "cloudflare/clairic");
-  assert.match(sent[0].fields.f0.instructions, /Does this file read query parameters with query.get/);
-  assert.match(sent[0].fields.f0.instructions, /changed source lines.*2/);
-  assert.deepEqual(results[0].findings[0].locations, [{ line: 2, endLine: 2, col: 7, endColumn: 22 }]);
-  assert.deepEqual(results[0].citation, { calls: 1, inputTokens: 120, outputTokens: 0 });
-  assert.match(format(results, "github"), /file=a.py,line=2,endLine=2,col=7,endColumn=22/);
+  assert.equal(sent[0].url, "https://openrouter.ai/api/alpha/decisions");
+  assert.deepEqual(sent[0].body.state, { content: source });
+  assert.deepEqual(sent[0].body.questions.f0.criteria, { none: "No source line supports the reported answer and finding.", line_2: "Line 2: new = query.get('new')" });
+  assert.match(sent[0].body.questions.f0.instructions, /Does this file read query parameters with query.get/);
+  assert.deepEqual(results[0].findings[0].locations, [{ line: 2, endLine: 2, col: 1, endColumn: 22 }]);
+  assert.deepEqual(results[0].citation, { calls: 1, inputTokens: 120, outputTokens: 20 });
+  assert.match(format(results, "github"), /file=a.py,line=2,endLine=2,col=1,endColumn=22/);
   assert.match(format(results, "github"), /citation: 1 calls, 120 input tokens/);
   assert.equal(exitCode(results), 0);
 });
 
-test("emits an annotation per occurrence, omitting columns for multiline spans", async () => {
-  stub({ answers: { f0: evidence(source, ["query.get('old')", "query.get('new')", source]) } });
-  const results = await run();
-  const annotations = format(results, "github").split("\n").filter((line) => line.startsWith("::warning"));
-  assert.equal(annotations.length, 3);
-  assert.match(annotations[0], /line=1,endLine=1,col=7,endColumn=22/);
-  assert.match(annotations[2], /line=1,endLine=2,title=/);
+test("blank and unchanged lines cannot be selected, and Unicode columns exclude CRLF", async () => {
+  const sent = stub({ answers: { f0: { probabilities: { none: 0.01, line_3: 0.99 } } } });
+  const results = await run({ source: "old\r\n  \r\n😀 target😀\r\n", changed: new Set([2, 3]) });
+  assert.deepEqual(Object.keys(sent[0].body.questions.f0.criteria), ["none", "line_3"]);
+  assert.deepEqual(results[0].findings[0].locations, [{ line: 3, endLine: 3, col: 1, endColumn: 9 }]);
 });
 
-test("citation is skipped for clean files and inputs over budget", async () => {
+test("citation is skipped for clean files, no eligible lines, and inputs over budget", async () => {
   const sent = stub({});
   const clean = await run({ yes: 0.1 });
   assert.equal(clean[0].citation, undefined);
+  const empty = await run({ source: " \n\t\n" });
+  assert.deepEqual(empty[0].citation, { calls: 0 });
+  const unchanged = await run({ changed: new Set([50]) });
+  assert.deepEqual(unchanged[0].citation, { calls: 0 });
   const large = await run({ citation: { ...citation, maxInputTokens: 1 } });
   assert.equal(large[0].citation?.calls, 0);
   assert.match(large[0].citation!.error!, /budget/);
@@ -82,15 +68,39 @@ test("citation is skipped for clean files and inputs over budget", async () => {
   assert.equal(sent.length, 0);
 });
 
-for (const [name, output, status] of [
-  ["unavailable extraction model", { error: { message: "Model cloudflare/clairic does not exist" } }, 400],
-  ["HTTP failure", { detail: "private source or credentials" }, 503],
-  ["truncation", { truncated: true, answers: { f0: evidence(source, [source]) } }, 200],
-  ["different state", { state_text: "different", answers: { f0: evidence(source, [source]) } }, 200],
-  ["missing answers", {}, 200],
+for (const [name, probabilities] of [
+  ["no evidence", { none: 0.9, line_1: 0.05, line_2: 0.05 }],
+  ["low probability", { none: 0.2, line_1: 0.4, line_2: 0.4 }],
+  ["unknown line", { none: 0.05, line_1: 0.05, line_50: 0.9 }],
+  ["missing probability", { line_1: 0.9 }],
+  ["negative probability", { none: -0.1, line_1: 0.95, line_2: 0.15 }],
+  ["probability over one", { none: 0, line_1: 1.1, line_2: 0 }],
+  ["non-numeric probability", { none: 0, line_1: "0.9", line_2: 0.1 }],
+  ["null probability", { none: 0, line_1: null, line_2: 0.9 }],
+  ["empty probabilities", {}],
 ] as const) {
-  test(`${name} preserves the decision and reports a safe citation diagnostic`, async () => {
-    stub(output, status);
+  test(`${name} retains the file-level finding`, async () => {
+    stub({ answers: { f0: { probabilities } } });
+    const results = await run();
+    assert.equal(results[0].findings.length, 1);
+    assert.equal(results[0].findings[0].locations, undefined);
+    assert.equal(results[0].unchecked, undefined);
+  });
+}
+
+test("a tie remains file-level even when both lines exceed the threshold", async () => {
+  stub({ answers: { f0: { probabilities: { none: 0, line_1: 0.5, line_2: 0.5 } } } });
+  const results = await run({ citation: { ...citation, threshold: 0.4 } });
+  assert.equal(results[0].findings[0].locations, undefined);
+});
+
+for (const [name, output, status] of [
+  ["HTTP failure", { detail: "private source or credentials" }, 503],
+  ["missing answers", {}, 200],
+  ["wrong answer type", { answers: { f0: { noul: 0.9 } } }, 200],
+] as const) {
+  test(`${name} preserves severity and reports a safe citation diagnostic without retries`, async () => {
+    const sent = stub(output, status);
     const cwd = await tree({ "a.py": source });
     const results = await lint([rule("query", {
       values: [{ value: "TRUE", severity: "error", report: "Fix." }, { value: "FALSE" }],
@@ -104,55 +114,28 @@ for (const [name, output, status] of [
     assert.ok(results[0].citation?.error);
     assert.doesNotMatch(JSON.stringify(results), /private|citation-test-key/);
     assert.match(format(results, "github"), /retaining file-level findings/);
+    assert.equal(sent.length, 1);
   });
 }
 
-for (const [name, answer] of [
-  ["null value with a guessed span", { ...evidence(source, [source]), value: null }],
-  ["low confidence", evidence(source, [source], 0.2)],
-  ["missing confidence", { type: "list", value: [source], spans: [[0, source.length]] }],
-  ["mismatched source text", { ...evidence(source, [source]), value: ["invented"] }],
-  ["invalid span", { ...evidence(source, [source]), spans: [[-1, source.length]] }],
-  ["mismatched list lengths", { ...evidence(source, [source]), spans: [] }],
-] as const) {
-  test(`${name} falls back to a file finding`, async () => {
-    stub({ answers: { f0: answer } });
-    const results = await run();
-    assert.equal(results[0].findings.length, 1);
-    assert.equal(results[0].findings[0].locations, undefined);
-  });
-}
-
-test("validates Unicode code-point and UTF-16 spans and rejects ambiguous or invalid ranges", () => {
-  const text = "😀 target";
-  assert.deepEqual(validatedOffsets(text, [2, 8], "target"), [3, 9]);
-  assert.deepEqual(validatedOffsets(text, [3, 9], "target"), [3, 9]);
-  assert.equal(validatedOffsets("😀aaa", [2, 3], "a"), undefined);
-  assert.equal(validatedOffsets(text, [2, 100], "target"), undefined);
-  assert.equal(validatedOffsets(text, [1.5, 3], "x"), undefined);
+test("network failures leave file findings intact", async () => {
+  globalThis.fetch = async () => { throw new Error("private provider details"); };
+  const results = await run();
+  assert.equal(results[0].findings.length, 1);
+  assert.equal(results[0].unchecked, undefined);
+  assert.match(results[0].citation!.error!, /request failed/);
+  assert.doesNotMatch(JSON.stringify(results), /private/);
 });
 
-test("Unicode offsets map to character columns", async () => {
-  const content = "😀 target😀\n";
-  stub({ answers: { f0: { type: "list", value: ["target😀"], spans: [[2, 9]], confidence: 0.99 } } });
-  const cwd = await tree({ "a.py": content });
-  const results = await lint([rule("query")], ["a.py"], {
-    cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: 0.9 })), citation,
-  });
-  assert.deepEqual(results[0].findings[0].locations, [{ line: 1, col: 3, endLine: 1, endColumn: 9 }]);
-});
-
-test("config resolves citation and a missing extraction key fails before model calls", async () => {
-  // Use config-file source so normal CLI loading and validation are exercised together.
-  const source = configSource().replace("export default {", `export default { citation: ${JSON.stringify({ ...citation, apiKey: "" })},`);
-  const cwd = await tree({ "decision-model-linter.config.ts": source, "a.py": "x" });
+test("config resolves citation and a missing citation key fails before model calls", async () => {
+  const config = configSource().replace("export default {", `export default { citation: ${JSON.stringify({ ...citation, apiKey: "" })},`);
+  const cwd = await tree({ "decision-model-linter.config.ts": config, "a.py": "x" });
   let error = "";
   const client = new FakeModel();
   const code = await main(["a.py"], { cwd, write: () => {}, writeError: (text) => { error += text; }, connect: () => client });
   assert.equal(code, 2);
   assert.match(error, /config.citation.apiKey/);
   assert.equal(client.calls.length, 0);
-  // Config validation rejects unknown fields and invalid limits without revealing values.
   const minimal = { model: MODEL, files: ["*.py"], suites: { api: { rules: { f: { prompt: "Q?", values: [{ value: "TRUE", report: "Fix" }, { value: "FALSE" }] } } } } };
   assert.deepEqual(resolveConfig({ ...minimal, citation }).citation, citation);
   for (const invalid of [{ ...citation, maxInputTokens: 0 }, { ...citation, threshold: 2 }, { ...citation, provider: "unknown" }, { ...citation, unknown: true }]) {
@@ -160,13 +143,13 @@ test("config resolves citation and a missing extraction key fails before model c
   }
 });
 
-test("CLI forwards citation config and batches findings into one extraction request", async () => {
+test("CLI batches findings into one citation call and annotates their selected lines", async () => {
   const sent = stub({ answers: {
-    f0: evidence(source, ["query.get('old')"]),
-    f1: evidence(source, ["query.get('new')"]),
+    f0: { probabilities: { none: 0.01, line_1: 0.98, line_2: 0.01 } },
+    f1: { probabilities: { none: 0.01, line_1: 0.01, line_2: 0.98 } },
   } });
   const config = {
-    model: MODEL, citation, files: ["*.py"], suites: { api: { rules: {
+    model: MODEL, citation: { ...citation, url: "https://citation.example/decisions" }, files: ["*.py"], suites: { api: { rules: {
       old: { prompt: "Old query?", values: [{ value: "TRUE", report: "Old." }, { value: "FALSE" }] },
       new: { prompt: "New query?", values: [{ value: "TRUE", report: "New." }, { value: "FALSE" }] },
     } } },
@@ -179,23 +162,8 @@ test("CLI forwards citation config and batches findings into one extraction requ
   });
   assert.equal(code, 0);
   assert.equal(sent.length, 1);
-  assert.deepEqual(Object.keys(sent[0].fields), ["f0", "f1"]);
-  assert.match(output, /line=1,endLine=1,col=7,endColumn=22/);
-  assert.match(output, /line=2,endLine=2,col=7,endColumn=22/);
-});
-
-test("network failures leave file findings intact", async () => {
-  globalThis.fetch = async () => { throw new Error("private provider details"); };
-  const results = await run();
-  assert.equal(results[0].findings.length, 1);
-  assert.equal(results[0].unchecked, undefined);
-  assert.match(results[0].citation!.error!, /request failed/);
-  assert.doesNotMatch(JSON.stringify(results), /private/);
-});
-
-
-test("a null optional state_text does not discard valid citations", async () => {
-  stub({ state_text: null, answers: { f0: evidence(source, ["query.get('new')"]) } });
-  const results = await run();
-  assert.equal(results[0].findings[0].locations?.[0].line, 2);
+  assert.equal(sent[0].url, "https://citation.example/decisions");
+  assert.deepEqual(Object.keys(sent[0].body.questions), ["f0", "f1"]);
+  assert.match(output, /line=1,endLine=1,col=1,endColumn=22/);
+  assert.match(output, /line=2,endLine=2,col=1,endColumn=22/);
 });

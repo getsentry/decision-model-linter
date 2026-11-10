@@ -44,7 +44,7 @@ export interface Finding {
 }
 
 export interface CallResult {
-  /** Optional extraction pass; failure never removes or changes a decision finding. */
+  /** Optional citation pass; failure never removes or changes a decision finding. */
   citation?: CitationResult;
   suite: string;
   path: string;

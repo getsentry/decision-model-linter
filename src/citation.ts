@@ -1,8 +1,9 @@
 import type { Citation, ResolvedRule } from "./config.ts";
 import type { Finding, SourceLocation } from "./evaluate.ts";
+import type { Question } from "./models.ts";
 import { openRouter } from "./openrouter.ts";
 
-/** Kept separate from decision usage: extraction failure is not a failed lint decision. */
+/** Kept separate from decision usage: citation failure is not a failed lint decision. */
 export interface CitationResult {
   calls: number;
   inputTokens?: number;
@@ -10,9 +11,7 @@ export interface CitationResult {
   error?: string;
 }
 
-class CitationError extends Error {}
-
-/** Enriches findings in place. No source is truncated and no finding is removed on failure. */
+/** Enriches findings in place with one representative source line each. */
 export async function citeFindings(
   source: string,
   findings: Finding[],
@@ -20,88 +19,57 @@ export async function citeFindings(
   changed: ReadonlySet<number> | undefined,
   options: Citation,
 ): Promise<CitationResult> {
-  const fields = Object.fromEntries(findings.map((finding, i) => {
+  const choices: Record<string, string> = { none: "No source line supports the reported answer and finding." };
+  const locations = new Map<string, SourceLocation>();
+  for (const [index, raw] of source.split("\n").entries()) {
+    const line = index + 1;
+    const text = raw.replace(/\r$/, "");
+    if (!text.trim() || (changed && !changed.has(line))) continue;
+    const id = `line_${line}`;
+    choices[id] = `Line ${line}: ${text}`;
+    locations.set(id, { line, endLine: line, col: 1, endColumn: Array.from(text).length });
+  }
+  if (!locations.size || !findings.length) return { calls: 0 };
+  const questions: Record<string, Question> = Object.fromEntries(findings.map((finding, i) => {
     const rule = rules.find((rule) => rule.name === finding.rule)!;
     return [`f${i}`, {
-      type: "list",
-      items: "text",
+      type: "choice",
       instructions: [
-        "Extract the smallest complete source expressions or statements that are evidence for this finding.",
-        "Return each occurrence separately. Return no evidence if the finding is unsupported.",
-        "For a missing safeguard, select the operation that needs that safeguard.",
-        ...(changed ? [`Only select evidence overlapping these changed source lines (one-based): ${[...changed].sort((a, b) => a - b).join(", ")}.`] : []),
+        "Which source line is the strongest evidence for this lint finding?",
+        "Select the line that needs to change to resolve the finding.",
+        "For a missing safeguard, select the operation that needs it. Select none if the finding is unsupported.",
         `Rule: ${rule.prompt}`,
         `Reported answer: ${finding.value}. ${rule.values.find((value) => value.value === finding.value)?.description ?? ""}`,
         `Finding: ${finding.message}`,
       ].join("\n"),
+      options: choices,
     }];
   }));
-  // Match the engine's conservative three-characters-per-token estimate. Skip rather than
-  // changing the source, which would invalidate offsets or hide relevant evidence.
-  if (source.length + JSON.stringify(fields).length + 512 > options.maxInputTokens * 3) {
-    return { calls: 0, error: "source and extraction fields exceed the citation input budget" };
+  const state = { content: source };
+  if (JSON.stringify(state).length + JSON.stringify(questions).length + 512 > options.maxInputTokens * 3) {
+    return { calls: 0, error: "source and questions exceed the citation input budget" };
   }
   const result: CitationResult = { calls: 1 };
   try {
-    const output = await openRouter({ ...options, apiKey: options.apiKey ?? "" }).extract(source, fields);
+    const output = await openRouter({ ...options, apiKey: options.apiKey ?? "", timeoutMs: 30_000, retries: 0 }).decide(state, questions);
     const tokens = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
-    result.inputTokens = tokens(output.usage?.input_tokens);
-    result.outputTokens = tokens(output.usage?.output_tokens);
-    if (output.truncated) throw new CitationError("citation input was truncated");
-    if (output.state_text != null && output.state_text !== source) {
-      throw new CitationError("citation offsets refer to different source text");
-    }
-    if (!output.answers || typeof output.answers !== "object") throw new CitationError("citation returned no answers");
+    result.inputTokens = tokens(output.inputTokens);
+    result.outputTokens = tokens(output.outputTokens);
     for (const [i, finding] of findings.entries()) {
       const answer = output.answers[`f${i}`];
-      if (answer?.type !== "list" || !Array.isArray(answer.value) || !Array.isArray(answer.spans) ||
-          !Number.isFinite(answer.confidence) || answer.confidence > 1 || answer.confidence < (options.threshold ?? 0.7) ||
-          answer.value.length !== answer.spans.length) continue;
-      const locations: SourceLocation[] = [];
-      for (let index = 0; index < answer.value.length; index++) {
-        const offsets = validatedOffsets(source, answer.spans[index], answer.value[index]);
-        if (!offsets) continue;
-        const [start, end] = offsets;
-        const location = coordinates(source, start, end);
-        if (changed && ![...changed].some((line) => line >= location.line && line <= location.endLine)) continue;
-        if (!locations.some((existing) => JSON.stringify(existing) === JSON.stringify(location))) locations.push(location);
-      }
-      if (locations.length) finding.locations = locations;
+      if (answer?.type !== "choice") continue;
+      const probabilities = Object.entries(answer.probabilities);
+      if (probabilities.length !== Object.keys(choices).length || probabilities.some(([id, probability]) =>
+        !Object.hasOwn(choices, id) || !Number.isFinite(probability) || probability < 0 || probability > 1)) continue;
+      probabilities.sort((a, b) => b[1] - a[1]);
+      const [id, probability] = probabilities[0];
+      if (probability < (options.threshold ?? 0.7) || probabilities[1]?.[1] === probability) continue;
+      const location = locations.get(id);
+      if (location) finding.locations = [location];
     }
-  } catch (error) {
-    // Do not log provider response bodies, URLs or exception messages: they can contain credentials
-    // or source. A failed optional extraction pass leaves the original findings intact.
-    result.error = `${error instanceof CitationError ? error.message : "citation request failed"}; retaining file-level findings`;
+  } catch {
+    // Provider errors can contain credentials or source; keep them out of reports.
+    result.error = "citation request failed; retaining file-level findings";
   }
   return result;
-}
-
-/** Validate half-open character spans against the extracted text before trusting coordinates.
- * Providers may count Unicode code points or UTF-16 units. Accept only an exact, unambiguous match.
- */
-export function validatedOffsets(source: string, span: unknown, text: unknown): [number, number] | undefined {
-  if (!Array.isArray(span) || span.length !== 2 || !span.every(Number.isInteger) ||
-      span[0] < 0 || span[1] <= span[0] || typeof text !== "string" || !text.trim().length) return;
-  const [start, end] = span;
-  const matches: [number, number][] = [];
-  if (end <= source.length && source.slice(start, end) === text) matches.push([start, end]);
-  const points = Array.from(source);
-  if (end <= points.length && points.slice(start, end).join("") === text) {
-    matches.push([points.slice(0, start).join("").length, points.slice(0, end).join("").length]);
-  }
-  if (!matches.length || matches.some(([a, b]) => a !== matches[0][0] || b !== matches[0][1])) return;
-  return matches[0];
-}
-
-/** Columns count Unicode code points; CRLF remains intact for validating provider offsets. */
-function coordinates(source: string, start: number, end: number): SourceLocation {
-  // Trailing line breaks are not useful annotation targets.
-  while (end > start && /[\r\n]/.test(source[end - 1])) end--;
-  const position = (offset: number) => {
-    const before = source.slice(0, offset);
-    return { line: before.split("\n").length, col: Array.from(before.slice(before.lastIndexOf("\n") + 1)).length + 1 };
-  };
-  const first = position(start);
-  const last = position(Math.max(start, end - (source.codePointAt(end - 2)! > 0xffff ? 2 : 1)));
-  return { line: first.line, col: first.col, endLine: last.line, endColumn: last.col };
 }

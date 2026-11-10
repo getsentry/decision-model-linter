@@ -1,27 +1,18 @@
-// The `openrouter` provider: typed decisions and source extraction through OpenRouter's alpha APIs.
+// The `openrouter` provider: typed decisions through OpenRouter's decisions API.
 import { type Answer, type DecisionModel, type Question, ModelError } from "./models.ts";
 
 export const DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
-export const EXTRACTIONS_URL = "https://openrouter.ai/api/alpha/extractions";
-
-/** An OpenRouter model client supporting decision and extraction requests. */
-export interface OpenRouterClient extends DecisionModel {
-  extract(state: string, fields: Record<string, object>): Promise<any>;
-}
 
 const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 
-/** A model client sharing credentials and transport across decisions and extractions.
- * Decisions default to a 180-second timeout and two retries; extraction defaults to 30 seconds
- * without retries. Explicit timeout/retry options override either method's defaults.
- */
+/** A decision model served by OpenRouter's decisions API. */
 export function openRouter(options: {
   name: string;
   apiKey: string;
   url?: string;
   timeoutMs?: number;
   retries?: number;
-}): OpenRouterClient {
+}): DecisionModel {
   const { name, apiKey, url, timeoutMs, retries } = options;
 
   return {
@@ -47,12 +38,6 @@ export function openRouter(options: {
         durationMs,
         model: payload.model,
       };
-    },
-    async extract(state, fields) {
-      return post(
-        url ?? EXTRACTIONS_URL, apiKey,
-        JSON.stringify({ model: name, state, fields }), timeoutMs ?? 30_000, retries ?? 0,
-      );
     },
   };
 }
