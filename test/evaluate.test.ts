@@ -14,6 +14,7 @@ test("rules of a suite that share a model and context share one call per file", 
   ];
   const client = new FakeModel();
   const results = await lint(rules, ["src/a/endpoints/x.py", "src/a/other.py", "src/a/tests/t.py"], {
+    citation: false,
     cwd,
     connect: () => client,
   });
@@ -38,7 +39,7 @@ test("an overridden context or model splits a rule into its own call, and suites
     rule("d", { model: { ...MODEL, name: "other-model" } }),
     rule("e", { suite: "security" }),
   ];
-  const results = await lint(rules, ["a.py"], { cwd, connect: () => new FakeModel() });
+  const results = await lint(rules, ["a.py"], { citation: false, cwd, connect: () => new FakeModel() });
   assert.deepEqual(
     results.map((r) => [r.suite, r.rules]).sort(),
     [
@@ -65,7 +66,7 @@ test("the config's ignores reach suites and rules with their own, and ! lints a 
   });
   const paths = ["src/app.py", "src/generated_stubs.py", "src/generated_schema.py", "src/migrations/0001.py"];
   const cwd = await tree(Object.fromEntries(paths.map((path) => [path, "x"])));
-  const results = await lint(rules, paths, { cwd, connect: () => new FakeModel() });
+  const results = await lint(rules, paths, { citation: false, cwd, connect: () => new FakeModel() });
   assert.deepEqual(
     results.map((r) => [r.path, r.rules]),
     [
@@ -90,7 +91,7 @@ test("TRUE/FALSE rules are yes/no questions; others are multiple choice", async 
       ? { type: "yesno", yes: 0.9 }
       : { type: "choice", probabilities: { YES: 0.1, NO: 0.8, NO_ENDPOINTS: 0.1 } },
   );
-  const [result] = await lint(rules, ["a.py"], { cwd, connect: () => client });
+  const [result] = await lint(rules, ["a.py"], { citation: false, cwd, connect: () => client });
   const { questions } = client.calls[0];
   const asked = (prompt: string) => `${WHOLE_FILE_INSTRUCTIONS}\n\nQuestion: ${prompt}`;
   assert.deepEqual(questions.flag, { type: "yesno", instructions: asked("Flag?"), criteria: { yes: "it is", no: "FALSE" } });
@@ -116,7 +117,7 @@ test("a reporting value at or above its threshold is a finding", async () => {
     }),
   ];
   const yes: Record<string, number> = { high: 0.97, low: 0.6, strict: 0.8, negative: 0.3 };
-  const [result] = await lint(rules, ["a.py"], { cwd, connect: () => new FakeModel((id) => ({ type: "yesno", yes: yes[id] })) });
+  const [result] = await lint(rules, ["a.py"], { citation: false, cwd, connect: () => new FakeModel((id) => ({ type: "yesno", yes: yes[id] })) });
   assert.deepEqual(
     result.findings.map((f) => [f.rule, f.value, f.severity, f.threshold, f.message]),
     [
@@ -136,7 +137,7 @@ test("context functions get the file and run at most once per file", async () =>
   // Two models, so each file is sent in two calls that share the context.
   const rules = [rule("f", { context: { schema, note: "static" } }), rule("g", { context: { schema, note: "static" }, model: { ...MODEL, name: "other-model" } })];
   const client = new FakeModel();
-  await lint(rules, ["a.py", "b.py"], { cwd, connect: () => client });
+  await lint(rules, ["a.py", "b.py"], { citation: false, cwd, connect: () => client });
   assert.deepEqual(runs.sort(), ["a.py", "b.py"]);
   assert.equal(client.calls.length, 4);
   for (const call of client.calls) {
@@ -148,7 +149,7 @@ test("context functions get the file and run at most once per file", async () =>
 test("content over the model's input limit is truncated with a marker, and the file is unchecked", async () => {
   const cwd = await tree({ "big.py": "line\n".repeat(5000) });
   const client = new FakeModel();
-  const [result] = await lint([rule("f", { model: { ...MODEL, maxInputTokens: 500 } })], ["big.py"], { cwd, connect: () => client });
+  const [result] = await lint([rule("f", { model: { ...MODEL, maxInputTokens: 500 } })], ["big.py"], { citation: false, cwd, connect: () => client });
   assert.ok(result.truncated);
   assert.equal(result.unchecked, "warn");
   assert.match(client.calls[0].state.content, /\[decision-model-linter: truncated, \d+ of \d+ characters omitted\]\n$/);
@@ -161,7 +162,7 @@ test("a call the provider rejects as too large is retried once at half the budge
     if (attempt === 1) throw new ModelError("HTTP 400: too large", true);
     return { type: "yesno", yes: 0.9 };
   });
-  const [result] = await lint([rule("f", { model: { ...MODEL, maxInputTokens: 2000 } })], ["big.py"], { cwd, connect: () => client });
+  const [result] = await lint([rule("f", { model: { ...MODEL, maxInputTokens: 2000 } })], ["big.py"], { citation: false, cwd, connect: () => client });
   assert.ok(result.shrunk);
   assert.equal(result.error, undefined);
   assert.ok(client.calls[1].state.content.length < client.calls[0].state.content.length);
@@ -174,7 +175,7 @@ test("a failed call leaves its file unchecked without stopping the others", asyn
     decide: (state, questions) =>
       state.path === "a.py" ? Promise.reject(new ModelError("HTTP 500: boom")) : client.decide(state, questions),
   };
-  const results = await lint([rule("f")], ["a.py", "b.py"], { cwd, connect: () => failing });
+  const results = await lint([rule("f")], ["a.py", "b.py"], { citation: false, cwd, connect: () => failing });
   assert.deepEqual([results[0].error, results[0].unchecked], ["HTTP 500: boom", "warn"]);
   assert.deepEqual([results[1].unchecked, results[1].findings.length], [undefined, 1]);
 });
@@ -183,7 +184,7 @@ test("an unchecked file takes the most severe unchecked setting among the call's
   const cwd = await tree({ "a.py": "1" });
   const failing: DecisionModel = { decide: () => Promise.reject(new ModelError("HTTP 500: boom")) };
   const rules = [rule("lenient"), rule("strict", { unchecked: "error" })];
-  const [result] = await lint(rules, ["a.py"], { cwd, connect: () => failing });
+  const [result] = await lint(rules, ["a.py"], { citation: false, cwd, connect: () => failing });
   assert.deepEqual([result.rules, result.unchecked], [["lenient", "strict"], "error"]);
 });
 
@@ -192,8 +193,8 @@ test("results name the provider and the model that answered", async () => {
   const answered: DecisionModel = {
     decide: async () => ({ answers: { f: { type: "yesno", yes: 0.1 } }, durationMs: 1, model: "test-model-2026" }),
   };
-  const [reported] = await lint([rule("f")], ["a.py"], { cwd, connect: () => answered });
+  const [reported] = await lint([rule("f")], ["a.py"], { citation: false, cwd, connect: () => answered });
   assert.deepEqual([reported.provider, reported.model], ["openrouter", "test-model-2026"]);
-  const [fallback] = await lint([rule("f")], ["a.py"], { cwd, connect: () => new FakeModel() });
+  const [fallback] = await lint([rule("f")], ["a.py"], { citation: false, cwd, connect: () => new FakeModel() });
   assert.equal(fallback.model, "test-model");
 });

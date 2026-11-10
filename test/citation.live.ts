@@ -4,13 +4,14 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Citation } from "../src/config.ts";
 
 assert.ok(process.env.OPENROUTER_API_KEY?.trim(), "Set OPENROUTER_API_KEY to run the live citation checks");
 const model = { provider: "openrouter", name: "typesafe/jev-1.13", maxInputTokens: 8192 };
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const cases: {
   name: string; path: string; source: string; prompt: string; report: string;
-  line: number | undefined; before?: string; context?: Record<string, string>;
+  line: number | undefined; before?: string; context?: Record<string, string>; citation?: Citation | false;
 }[] = [
   { name: "declaration", path: "a.py", source: "def greet(name):\n    return name\n", prompt: "Does the code define a function without a return type annotation?", report: "Add a return type annotation.", line: 1 },
   { name: "print", path: "a.py", source: "def greet(name):\n    print(name)\n", prompt: "Does the code call print?", report: "Remove the print call.", line: 2 },
@@ -28,12 +29,13 @@ const cases: {
     report: "Remove the function call matching the file name.", line: index + 1,
   })),
   { name: "clean", path: "a.py", source: "def greet(name):\n    return name\n", prompt: "Does the code call print?", report: "Remove the print call.", line: undefined },
+  { name: "disabled", path: "a.py", source: "print('hello')\n", prompt: "Does the code call print?", report: "Remove the print call.", line: 1, citation: false },
 ];
 
 for (const fixture of cases) {
   const cwd = await mkdtemp(join(tmpdir(), "citation-live-"));
   try {
-    const config = { model, citation: { threshold: 0.7 }, context: fixture.context, suites: { smoke: { files: [fixture.path], unchecked: "error", rules: {
+    const config = { model, citation: fixture.citation, context: fixture.context, suites: { smoke: { files: [fixture.path], unchecked: "error", rules: {
       violation: { prompt: fixture.prompt, values: [{ value: "TRUE", severity: "error", report: fixture.report }, { value: "FALSE" }] },
     } } } };
     await writeFile(join(cwd, "config.mjs"), `const config = ${JSON.stringify(config)}; config.model.apiKey = process.env.OPENROUTER_API_KEY; export default config;`);
@@ -50,7 +52,11 @@ for (const fixture of cases) {
     const results = JSON.parse(run.stdout);
     const findings = results.flatMap((call: { findings: unknown[] }) => call.findings);
     assert.equal(run.status, fixture.line === undefined ? 0 : 1, fixture.name);
-    if (fixture.line === undefined) {
+    if (fixture.citation === false) {
+      assert.equal(findings.length, 1, fixture.name);
+      assert.equal(findings[0].locations, undefined);
+      assert.ok(results.every((call: { citation?: unknown }) => call.citation === undefined));
+    } else if (fixture.line === undefined) {
       assert.deepEqual(findings, []);
       assert.ok(results.every((call: { citation?: unknown }) => call.citation === undefined));
     } else {
@@ -58,7 +64,7 @@ for (const fixture of cases) {
       assert.equal(findings[0].locations?.[0]?.line, fixture.line, `${fixture.name}: citation should identify the offending line`);
       assert.equal(results[0].unchecked, undefined, fixture.name);
     }
-    console.log(`PASS ${fixture.name}${fixture.line === undefined ? " has no findings" : ` cites line ${fixture.line}`}`);
+    console.log(`PASS ${fixture.name}${fixture.citation === false ? " retains file-level finding" : fixture.line === undefined ? " has no findings" : ` cites line ${fixture.line}`}`);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

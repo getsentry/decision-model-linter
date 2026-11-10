@@ -21,11 +21,11 @@ function stub(output: unknown, status = 200) {
   return sent;
 }
 
-async function run(options: { changed?: Set<number>; citation?: Citation; model?: Model; yes?: number; source?: string } = {}) {
+async function run(options: { changed?: Set<number>; citation?: Citation | false; model?: Model; yes?: number; source?: string } = {}) {
   const cwd = await tree({ "a.py": options.source ?? source });
   return lint([rule("query", { prompt: "Does this file read query parameters with query.get?", model: options.model ?? MODEL })], ["a.py"], {
     cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: options.yes ?? 0.9 })),
-    citation: options.citation ?? citation,
+    citation: options.citation,
     newLines: options.changed ? new Map([["a.py", options.changed]]) : undefined,
   });
 }
@@ -50,6 +50,15 @@ test("blank and unchanged lines cannot be selected, and Unicode columns exclude 
   const results = await run({ source: "old\r\n  \r\n😀 target😀\r\n", changed: new Set([2, 3]) });
   assert.deepEqual(Object.keys(sent[0].body.questions.f0.criteria), ["none", "line_3"]);
   assert.deepEqual(results[0].findings[0].locations, [{ line: 3, endLine: 3, col: 1, endColumn: 9 }]);
+});
+
+test("citation false skips requests and preserves the file-level finding", async () => {
+  const sent = stub({});
+  const results = await run({ citation: false });
+  assert.equal(sent.length, 0);
+  assert.equal(results[0].citation, undefined);
+  assert.equal(results[0].findings.length, 1);
+  assert.equal(results[0].findings[0].locations, undefined);
 });
 
 test("citation is skipped for clean files, no eligible lines, and inputs over budget", async () => {
@@ -217,7 +226,7 @@ test("network failures leave file findings intact", async () => {
 });
 
 test("config resolves citation settings and the shared model key is required", async () => {
-  const config = configSource().replace("export default {", `export default { citation: ${JSON.stringify(citation)},`).replace('apiKey: "test"', 'apiKey: ""');
+  const config = configSource().replace("citation: false", `citation: ${JSON.stringify(citation)}`).replace('apiKey: "test"', 'apiKey: ""');
   const cwd = await tree({ "decision-model-linter.config.ts": config, "a.py": "x" });
   let error = "";
   const client = new FakeModel();
@@ -228,10 +237,39 @@ test("config resolves citation settings and the shared model key is required", a
   const minimal = { model: MODEL, files: ["*.py"], suites: { api: { rules: { f: { prompt: "Q?", values: [{ value: "TRUE", report: "Fix" }, { value: "FALSE" }] } } } } };
   assert.deepEqual(resolveConfig({ ...minimal, citation }).citation, citation);
   assert.deepEqual(resolveConfig({ ...minimal, citation: {} }).citation, {});
+  assert.equal(resolveConfig({ ...minimal, citation: false }).citation, false);
   for (const invalid of [null, true, { threshold: -1 }, { threshold: 2 }, { threshold: NaN }, { threshold: Infinity }, { threshold: "0.7" }, { model: MODEL }, { apiKey: "unused" }, { maxInputTokens: 8192 }, { provider: "openrouter" }, { unknown: true }]) {
     assert.throws(() => resolveConfig({ ...minimal, citation: invalid }), /config.citation/);
   }
 });
+
+for (const [name, setting, expectedLine] of [
+  ["omitted", undefined, 1],
+  ["empty settings", {}, 1],
+  ["disabled", false, undefined],
+  ["higher threshold", { threshold: 0.9 }, undefined],
+] as const) {
+  test(`CLI citation ${name}`, async () => {
+    const sent = stub({ answers: { f0: { probabilities: { none: 0.1, line_1: 0.8, line_2: 0.1 } } } });
+    const config = {
+      model: MODEL, citation: setting, files: ["*.py"], suites: { api: { rules: {
+        query: { prompt: "Q?", values: [{ value: "TRUE", report: "Fix." }, { value: "FALSE" }] },
+      } } },
+    };
+    const cwd = await tree({ "decision-model-linter.config.ts": `export default ${JSON.stringify(config)};`, "a.py": source });
+    let output = "";
+    const code = await main(["--format", "json", "a.py"], {
+      cwd, write: (text) => { output += text; }, writeError: () => {},
+      connect: () => new FakeModel(() => ({ type: "yesno", yes: 0.9 })),
+    });
+    const [result] = JSON.parse(output);
+    assert.equal(code, 0);
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].locations?.[0]?.line, expectedLine);
+    assert.equal(sent.length, setting === false ? 0 : 1);
+    if (setting === false) assert.equal(result.citation, undefined);
+  });
+}
 
 test("CLI batches findings into one citation call and annotates their selected lines", async () => {
   const sent = stub({ answers: {

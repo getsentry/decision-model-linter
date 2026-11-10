@@ -71,7 +71,7 @@ export interface CallResult {
 }
 
 export interface LintOptions {
-  citation?: Citation;
+  citation?: Citation | false;
   cwd: string;
   /** The decision model for a configured model. */
   connect: (model: Model) => DecisionModel;
@@ -127,7 +127,7 @@ export async function lint(
   const contexts = new Map<ContextValue, Map<string, Promise<string>>>();
   const deps = {
     cwd,
-    citation: options.citation,
+    citation: options.citation === false ? undefined : options.citation ?? {},
     contexts,
     model: (model: Model) => {
       const key = modelKey(model);

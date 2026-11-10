@@ -75,6 +75,7 @@ test("a changed file shows only its new lines, with the new-lines instructions",
   const cwd = await repo();
   const client = new FakeModel(() => ({ type: "yesno", yes: 0.9 }));
   const [changed, whole] = await lint([swallows], ["modified.py", "new.py"], {
+    citation: false,
     cwd,
     connect: () => client,
     newLines: new Map([["modified.py", new Set([4, 5])]]),

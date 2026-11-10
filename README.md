@@ -81,10 +81,11 @@ If the repository's `package.json` has no `"type": "module"`, keep the config in
 npm install --save-dev @sentry/decision-model-linter
 ```
 
-## Optional source citations
+## Source citations
 
-Use a second decision pass to attach a source line to each finding. Enable
-`citation` to reuse the model configured for each lint decision:
+By default, a second decision pass attaches a source line to each finding using
+the model configured for that lint decision, with a line probability threshold
+of 0.7. Configure `citation` to override the threshold:
 
 ```ts
 export default {
@@ -94,10 +95,10 @@ export default {
 } satisfies Config;
 ```
 
-`citation` is optional and configured on the root config. Omit it to disable the
-second pass. Set it to `{}` to use the default line probability threshold of 0.7,
-or set `threshold` independently of the rule's decision threshold. Citations use
-the decision call's resolved model, API key, endpoint, and input budget.
+Set `citation: false` on the root config to disable the second pass. Omitting
+`citation` or setting it to `{}` uses the default line probability threshold of
+0.7. The citation threshold is independent of the rule's decision threshold.
+Citations use the decision call's resolved model, API key, endpoint, and input budget.
 Each flagged decision call batches its findings into one citation request. The
 model selects one representative source line per finding, or no evidence, using
 the source, rule questions, and reported answers.
