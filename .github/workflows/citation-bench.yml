@@ -1,7 +1,7 @@
 name: Citation strategy bench
 
 # Live comparison of line-citation strategies against the decisions API (bench/citation-strategies.ts).
-# Needs the OPENROUTER_API_KEY repository secret; results land in the job summary.
+# Reads the DECISION_MODEL_LINTER_OPENROUTER_API_KEY secret, as getsentry/sentry and getsentry/seer do; results land in the job summary.
 on:
   pull_request:
     paths: ['bench/**', '.github/workflows/citation-bench.yml']
@@ -28,4 +28,4 @@ jobs:
 
       - run: node bench/citation-strategies.ts --repeats 3
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.DECISION_MODEL_LINTER_OPENROUTER_API_KEY }}
