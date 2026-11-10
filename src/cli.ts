@@ -69,7 +69,6 @@ async function run(argv: string[], deps: CliDeps): Promise<number> {
   }
   const { rules, concurrency, citation } = config;
   const missingKeys = [...new Set(rules.filter((rule) => !rule.model.apiKey?.trim()).map((rule) => rule.modelAt))];
-  if (citation && !citation.apiKey?.trim()) missingKeys.push("config.citation");
   if (missingKeys.length) {
     const settings = missingKeys.map((at) => `${at}.apiKey`).join(", ");
     deps.writeError(`decision-model-linter config: ${settings} is empty; set the environment variable the config reads it from\n`);

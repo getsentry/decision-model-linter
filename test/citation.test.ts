@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
-import { resolveConfig, type Citation } from "../src/config.ts";
+import { resolveConfig, type Citation, type Model } from "../src/config.ts";
 import { lint } from "../src/evaluate.ts";
 import { main } from "../src/cli.ts";
 import { exitCode, format } from "../src/report.ts";
@@ -9,21 +9,21 @@ import { FakeModel, MODEL, configSource, rule, tree } from "./helpers.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
-const citation: Citation = { ...MODEL, name: "typesafe/jev-1.13", apiKey: "citation-test-key", maxInputTokens: 8192 };
+const citation: Citation = { threshold: 0.7 };
 const source = "old = query.get('old')\r\nnew = query.get('new')\r\n";
 
 function stub(output: unknown, status = 200) {
-  const sent: { url: string; body: any }[] = [];
+  const sent: { url: string; body: any; headers: Headers }[] = [];
   globalThis.fetch = async (url, init) => {
-    sent.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+    sent.push({ url: String(url), body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
     return new Response(JSON.stringify(output), { status });
   };
   return sent;
 }
 
-async function run(options: { changed?: Set<number>; citation?: Citation; yes?: number; source?: string } = {}) {
+async function run(options: { changed?: Set<number>; citation?: Citation; model?: Model; yes?: number; source?: string } = {}) {
   const cwd = await tree({ "a.py": options.source ?? source });
-  return lint([rule("query", { prompt: "Does this file read query parameters with query.get?" })], ["a.py"], {
+  return lint([rule("query", { prompt: "Does this file read query parameters with query.get?", model: options.model ?? MODEL })], ["a.py"], {
     cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: options.yes ?? 0.9 })),
     citation: options.citation ?? citation,
     newLines: options.changed ? new Map([["a.py", options.changed]]) : undefined,
@@ -60,7 +60,7 @@ test("citation is skipped for clean files, no eligible lines, and inputs over bu
   assert.deepEqual(empty[0].citation, { calls: 0 });
   const unchanged = await run({ changed: new Set([50]) });
   assert.deepEqual(unchanged[0].citation, { calls: 0 });
-  const large = await run({ citation: { ...citation, maxInputTokens: 1 } });
+  const large = await run({ model: { ...MODEL, maxInputTokens: 1 } });
   assert.equal(large[0].citation?.calls, 0);
   assert.match(large[0].citation!.error!, /budget/);
   assert.equal(large[0].findings.length, 1);
@@ -96,6 +96,31 @@ test("rounded probabilities still select a confident line", async () => {
   assert.equal(results[0].findings[0].locations?.[0]?.line, 1);
 });
 
+test("citation threshold is configurable independently of the decision threshold", async () => {
+  stub({ answers: { f0: { probabilities: { none: 0.1, line_1: 0.8, line_2: 0.1 } } } });
+  const defaultThreshold = await run({ citation: {} });
+  assert.equal(defaultThreshold[0].findings[0].locations?.[0]?.line, 1);
+  const higherThreshold = await run({ citation: { threshold: 0.9 } });
+  assert.equal(higherThreshold[0].findings.length, 1);
+  assert.equal(higherThreshold[0].findings[0].locations, undefined);
+  assert.equal(higherThreshold[0].findings[0].threshold, 0.7);
+});
+
+test("citation reuses the resolved rule model, API key, and endpoint", async () => {
+  const sent = stub({ answers: { f0: { probabilities: { none: 0.01, line_1: 0.98, line_2: 0.01 } } } });
+  const model = { ...MODEL, name: "rule-model", apiKey: "rule-test-key", url: "https://rule.example/decisions" };
+  const cwd = await tree({ "a.py": source });
+  const results = await lint([rule("query", { model })], ["a.py"], {
+    cwd, connect: (configured) => { assert.deepEqual(configured, model); return new FakeModel(() => ({ type: "yesno", yes: 0.9 })); },
+    citation: {},
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, model.url);
+  assert.equal(sent[0].body.model, model.name);
+  assert.equal(sent[0].headers.get("authorization"), `Bearer ${model.apiKey}`);
+  assert.equal(results[0].findings[0].locations?.[0]?.line, 1);
+});
+
 test("citation uses resolved context and path to distinguish identical source", async () => {
   const cwd = await tree({ "a.py": "call_a()\ncall_b()\n" });
   for (const [forbidden, line] of [["call_a", 1], ["call_b", 2]] as const) {
@@ -127,7 +152,7 @@ test("citation uses resolved context and path to distinguish identical source", 
 test("citation budget includes resolved context", async () => {
   const sent = stub({});
   const cwd = await tree({ "a.py": source });
-  const results = await lint([rule("query", { context: { reference: "x".repeat(25_000) } })], ["a.py"], {
+  const results = await lint([rule("query", { model: { ...MODEL, maxInputTokens: 8192 }, context: { reference: "x".repeat(23_500) } })], ["a.py"], {
     cwd, connect: () => new FakeModel(() => ({ type: "yesno", yes: 0.9 })), citation,
   });
   assert.equal(sent.length, 0);
@@ -154,7 +179,7 @@ test("a malformed distribution does not discard another finding's valid citation
 
 test("a tie remains file-level even when both lines exceed the threshold", async () => {
   stub({ answers: { f0: { probabilities: { none: 0, line_1: 0.5, line_2: 0.5 } } } });
-  const results = await run({ citation: { ...citation, threshold: 0.4 } });
+  const results = await run({ citation: { threshold: 0.4 } });
   assert.equal(results[0].findings[0].locations, undefined);
 });
 
@@ -191,18 +216,19 @@ test("network failures leave file findings intact", async () => {
   assert.doesNotMatch(JSON.stringify(results), /private/);
 });
 
-test("config resolves citation and a missing citation key fails before model calls", async () => {
-  const config = configSource().replace("export default {", `export default { citation: ${JSON.stringify({ ...citation, apiKey: "" })},`);
+test("config resolves citation settings and the shared model key is required", async () => {
+  const config = configSource().replace("export default {", `export default { citation: ${JSON.stringify(citation)},`).replace('apiKey: "test"', 'apiKey: ""');
   const cwd = await tree({ "decision-model-linter.config.ts": config, "a.py": "x" });
   let error = "";
   const client = new FakeModel();
   const code = await main(["a.py"], { cwd, write: () => {}, writeError: (text) => { error += text; }, connect: () => client });
   assert.equal(code, 2);
-  assert.match(error, /config.citation.apiKey/);
+  assert.match(error, /config.model.apiKey/);
   assert.equal(client.calls.length, 0);
   const minimal = { model: MODEL, files: ["*.py"], suites: { api: { rules: { f: { prompt: "Q?", values: [{ value: "TRUE", report: "Fix" }, { value: "FALSE" }] } } } } };
   assert.deepEqual(resolveConfig({ ...minimal, citation }).citation, citation);
-  for (const invalid of [{ ...citation, maxInputTokens: 0 }, { ...citation, threshold: 2 }, { ...citation, provider: "unknown" }, { ...citation, unknown: true }]) {
+  assert.deepEqual(resolveConfig({ ...minimal, citation: {} }).citation, {});
+  for (const invalid of [null, true, { threshold: -1 }, { threshold: 2 }, { threshold: NaN }, { threshold: Infinity }, { threshold: "0.7" }, { model: MODEL }, { apiKey: "unused" }, { maxInputTokens: 8192 }, { provider: "openrouter" }, { unknown: true }]) {
     assert.throws(() => resolveConfig({ ...minimal, citation: invalid }), /config.citation/);
   }
 });
@@ -213,7 +239,7 @@ test("CLI batches findings into one citation call and annotates their selected l
     f1: { probabilities: { none: 0.01, line_1: 0.01, line_2: 0.98 } },
   } });
   const config = {
-    model: MODEL, citation: { ...citation, url: "https://citation.example/decisions" }, files: ["*.py"], suites: { api: { rules: {
+    model: { ...MODEL, name: "shared-model", url: "https://citation.example/decisions" }, citation, files: ["*.py"], suites: { api: { rules: {
       old: { prompt: "Old query?", values: [{ value: "TRUE", report: "Old." }, { value: "FALSE" }] },
       new: { prompt: "New query?", values: [{ value: "TRUE", report: "New." }, { value: "FALSE" }] },
     } } },
@@ -227,6 +253,7 @@ test("CLI batches findings into one citation call and annotates their selected l
   assert.equal(code, 0);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].url, "https://citation.example/decisions");
+  assert.equal(sent[0].body.model, "shared-model");
   assert.deepEqual(Object.keys(sent[0].body.questions), ["f0", "f1"]);
   assert.match(output, /line=1,endLine=1,col=1,endColumn=22/);
   assert.match(output, /line=2,endLine=2,col=1,endColumn=22/);

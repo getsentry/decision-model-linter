@@ -21,9 +21,9 @@ export interface Model {
   url?: string;
 }
 
-/** Optional second pass that selects a source line through a decision model. */
-export interface Citation extends Model {
-  /** Minimum line probability; independent of the rule's decision threshold. Default 0.7. */
+/** Optional source citations using the decision call's model. */
+export interface Citation {
+  /** Minimum line probability, independent of the rule's decision threshold. Default 0.7. */
   threshold?: number;
 }
 
@@ -122,11 +122,9 @@ export function resolveConfig(raw: unknown, only: readonly string[] = []): { rul
   checkKeys(raw, "config", [...SETTING_KEYS, "concurrency", "suites", "citation"]);
   checkSettings(raw, "config");
   if (raw.citation !== undefined) {
-    const value = raw.citation;
-    if (!isObject(value)) throw new ConfigError("config.citation: must be an object");
-    const { threshold, ...model } = value;
-    checkModel(model, "config.citation");
-    if (value.threshold !== undefined) checkThreshold(value.threshold, "config.citation.threshold");
+    if (!isObject(raw.citation)) throw new ConfigError("config.citation: must be an object");
+    checkKeys(raw.citation, "config.citation", ["threshold"]);
+    if (raw.citation.threshold !== undefined) checkThreshold(raw.citation.threshold, "config.citation.threshold");
   }
   const { concurrency = DEFAULT_CONCURRENCY } = raw;
   if (!Number.isInteger(concurrency) || concurrency < 1) {

@@ -33,10 +33,10 @@ const cases: {
 for (const fixture of cases) {
   const cwd = await mkdtemp(join(tmpdir(), "citation-live-"));
   try {
-    const config = { model, citation: model, context: fixture.context, suites: { smoke: { files: [fixture.path], unchecked: "error", rules: {
+    const config = { model, citation: { threshold: 0.7 }, context: fixture.context, suites: { smoke: { files: [fixture.path], unchecked: "error", rules: {
       violation: { prompt: fixture.prompt, values: [{ value: "TRUE", severity: "error", report: fixture.report }, { value: "FALSE" }] },
     } } } };
-    await writeFile(join(cwd, "config.mjs"), `const config = ${JSON.stringify(config)}; config.model.apiKey = config.citation.apiKey = process.env.OPENROUTER_API_KEY; export default config;`);
+    await writeFile(join(cwd, "config.mjs"), `const config = ${JSON.stringify(config)}; config.model.apiKey = process.env.OPENROUTER_API_KEY; export default config;`);
     if (fixture.before !== undefined) {
       await writeFile(join(cwd, fixture.path), fixture.before);
       for (const args of [["init", "-q"], ["add", "."], ["-c", "commit.gpgsign=false", "-c", "user.name=Citation test", "-c", "user.email=citation@example.test", "commit", "-qm", "base"]]) {

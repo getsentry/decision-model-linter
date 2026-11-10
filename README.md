@@ -83,23 +83,24 @@ npm install --save-dev @sentry/decision-model-linter
 
 ## Optional source citations
 
-Use a second decision pass to attach a source line to each finding. Configure
-`citation` as a `Model`; it can reuse the Jev model and OpenRouter API key:
+Use a second decision pass to attach a source line to each finding. Enable
+`citation` to reuse the model configured for each lint decision:
 
 ```ts
 export default {
   model: jev,
-  citation: { ...jev, threshold: 0.7 },
+  citation: { threshold: 0.7 },
   suites: { security },
 } satisfies Config;
 ```
 
-`citation` is optional and configured on the root config. It accepts the `Model`
-fields plus a line probability `threshold` (default 0.7), independent of the rule's
-decision threshold. Its API key must be nonempty; `url` can override the decisions
-endpoint. Each flagged decision call batches its findings into one citation
-request. The model selects one representative source line per finding, or no
-evidence, using the source, rule questions, and reported answers.
+`citation` is optional and configured on the root config. Omit it to disable the
+second pass. Set it to `{}` to use the default line probability threshold of 0.7,
+or set `threshold` independently of the rule's decision threshold. Citations use
+the decision call's resolved model, API key, endpoint, and input budget.
+Each flagged decision call batches its findings into one citation request. The
+model selects one representative source line per finding, or no evidence, using
+the source, rule questions, and reported answers.
 
 Selected lines become `locations` in JSON output and whole-line annotations with
 `--format github`. In changeset mode, only changed, nonblank lines can be selected.
