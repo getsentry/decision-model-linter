@@ -67,7 +67,7 @@ async function run(argv: string[], deps: CliDeps): Promise<number> {
     deps.writeError(`decision-model-linter config: ${error.message}\n`);
     return 2;
   }
-  const { rules, concurrency } = config;
+  const { rules, concurrency, citation } = config;
   const missingKeys = [...new Set(rules.filter((rule) => !rule.model.apiKey?.trim()).map((rule) => rule.modelAt))];
   if (missingKeys.length) {
     const settings = missingKeys.map((at) => `${at}.apiKey`).join(", ");
@@ -117,6 +117,7 @@ async function run(argv: string[], deps: CliDeps): Promise<number> {
     cwd: deps.cwd,
     connect: deps.connect ?? connect,
     concurrency,
+    citation,
     newLines,
     renamedFrom,
   });

@@ -1,5 +1,4 @@
-// The `openrouter` provider: OpenRouter's decisions API, whose `noul` and `choice` primitives are
-// yes/no and multiple-choice questions (https://docs.typesafe.ai/primitives/noul).
+// The `openrouter` provider: typed decisions through OpenRouter's decisions API.
 import { type Answer, type DecisionModel, type Question, ModelError } from "./models.ts";
 
 export const DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
@@ -14,14 +13,14 @@ export function openRouter(options: {
   timeoutMs?: number;
   retries?: number;
 }): DecisionModel {
-  const { name, apiKey, url = DECISIONS_URL, timeoutMs = 180_000, retries = 2 } = options;
+  const { name, apiKey, url, timeoutMs, retries } = options;
 
   return {
     async decide(state, questions) {
       const asked = Object.fromEntries(Object.entries(questions).map(([id, q]) => [id, toApi(q)]));
       const body = JSON.stringify({ model: name, state, questions: asked });
       const started = performance.now();
-      const payload = await post(url, apiKey, body, timeoutMs, retries);
+      const payload = await post(url ?? DECISIONS_URL, apiKey, body, timeoutMs ?? 180_000, retries ?? 2);
       const durationMs = performance.now() - started;
 
       const raw = payload.answers ?? {};
@@ -62,7 +61,7 @@ function fromApi(question: Question, answer: any): Answer | null {
     : null;
 }
 
-/** POSTs to the decisions API, retrying rate limits and server errors with backoff. */
+/** POSTs to an OpenRouter endpoint, retrying rate limits and server errors with backoff when enabled. */
 async function post(url: string, apiKey: string, body: string, timeoutMs: number, retries: number): Promise<any> {
   for (let attempt = 0; ; attempt++) {
     let failure: ModelError;
