@@ -97,7 +97,7 @@ function github(results: readonly CallResult[]): string {
       const range = location
         ? `,line=${location.line},endLine=${location.endLine}${location.line === location.endLine ? `,col=${location.col},endColumn=${location.endColumn}` : ""}`
         : "";
-      return `::${command(f.severity)} file=${property(f.path)}${range},title=${property(`decision-model-linter ${f.suite}/${f.rule}`)}::${data(f.message)}`;
+      return `::${command(f.severity)} file=${property(f.path)}${range},title=${property(`decision-model-linter ${f.suite}/${f.rule}`)}::${data(oneLine(f.message))}`;
     })),
     ...(call.unchecked
       ? [`::${command(call.unchecked)} file=${property(call.path)},title=${property(`decision-model-linter ${call.suite}`)}::${data(gap(call))}`]
@@ -179,7 +179,7 @@ function oneLine(text: string): string {
 
 /** `text` escaped for a workflow command message, per GitHub's syntax. */
 function data(text: string): string {
-  return oneLine(text).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+  return text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
 }
 
 /** `text` escaped for a workflow command property (file=, title=). */

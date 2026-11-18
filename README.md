@@ -103,6 +103,14 @@ Each flagged decision call batches its findings into one citation request. The
 model selects one representative source line per finding, or no evidence, using
 the source, rule questions, and reported answers.
 
+The citation request tags source lines with IDs and offers those IDs as choices.
+Up to 254 eligible lines fit alongside `none` in one question. Larger candidate
+sets use a range question and line questions for nonempty 100-line ranges,
+all in the same request. A range with one eligible line resolves directly.
+The citation threshold applies to the product of the
+selected range and line probabilities. More than 254 nonempty ranges retain
+file-level findings because the range question would exceed the API option limit.
+
 Selected lines become `locations` in JSON output and whole-line annotations with
 `--format github`. In changeset mode, only changed, nonblank lines can be selected.
 Failed, uncertain, or unsupported citations leave the original file-level finding,

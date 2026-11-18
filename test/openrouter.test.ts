@@ -64,6 +64,15 @@ test("a url overrides the endpoint", async () => {
   assert.equal(sent[0].url, "https://decisions.example/v1");
 });
 
+test("bare choice ids keep null descriptions in the request", async () => {
+  const sent = stubFetch(() => new Response(JSON.stringify({ answers: { line: { probabilities: { L001: 1, none: 0 } } } })));
+  await openRouter({ name: "test-model", apiKey: "test" }).decide(
+    { content: "L001| target" },
+    { line: { type: "choice", instructions: "Which line?", options: { L001: null, none: "No evidence" } } },
+  );
+  assert.deepEqual(sent[0].body.questions.line.criteria, { L001: null, none: "No evidence" });
+});
+
 test("max_tokens_exceeded is a too-large error, and is not retried", async () => {
   const sent = stubFetch(() => new Response('{"error":{"code":"max_tokens_exceeded"}}', { status: 400 }));
   await assert.rejects(
