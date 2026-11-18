@@ -1,15 +1,17 @@
-// Compares three ways to cite a source line for a lint finding through the decisions API.
+// Compares ways to cite a source line for a lint finding through the decisions API.
 //
-//   lines   PR #6 as written: one Choice whose options are `line_N: "Line N: <text>"` (+ none).
-//   digits  Content tagged `0042| ...`; one Choice per digit of the line number, options 0-9.
-//           Decoded greedily (argmax per digit) and constrained (best product over real lines).
-//   ids     TypeSafe's line-search recipe: content tagged `L0042| ...`, options are bare ids with
-//           no description. Over 254 lines it fans out in one request: a
-//           window question plus one id question per 100-line window; read the chosen window's.
+//   lines           PR #6 as written: one Choice whose options are `line_N: "Line N: <text>"` (+ none).
+//   lines-windowed  lines, past the option limit: the same options in overlapping blocks (1-110, 100-210, ...).
+//   digits          Content tagged `0042| ...`; one Choice per digit of the line number, options 0-9.
+//                   Decoded greedily (argmax per digit) and constrained (best product over real lines).
+//   ids             TypeSafe's line-search recipe: content tagged `L0042| ...`, options are bare ids with
+//                   no description (+ none). Over 254 lines it fans out in one request: a
+//                   window question plus one id question per 100-line window; read the chosen window's.
+// The unsupported cases (none-*) have no line behind the finding: the right answer is none.
 //
 // Usage:
 //   node bench/citation-strategies.ts --dry                # request sizes only, no API calls
-//   OPENROUTER_API_KEY=... node bench/citation-strategies.ts [--repeats 3] [--only digits,ids]
+//   OPENROUTER_API_KEY=... node bench/citation-strategies.ts [--repeats 3] [--only digits,ids] [--cases none,edge]
 //   MODEL=typesafe/jev-1.13 DECISIONS_URL=https://openrouter.ai/api/alpha/decisions (defaults)
 // In GitHub Actions the output is also written to the job summary.
 import { appendFileSync, readFileSync, readdirSync } from "node:fs";
@@ -25,12 +27,17 @@ const DRY = flag("dry");
 const REPEATS = Number(option("repeats", "3"));
 const ONLY = option("only", "lines,digits,ids").split(",");
 const SIZES = option("sizes", "60,250,1000,2000").split(",").map(Number);
+const CASE_PREFIXES = option("cases", "").split(",").filter(Boolean);
 const MODEL = process.env.MODEL ?? "typesafe/jev-1.13";
 const URL = process.env.DECISIONS_URL ?? "https://openrouter.ai/api/alpha/decisions";
 const KEY = process.env.OPENROUTER_API_KEY ?? "";
 const THRESHOLD = 0.7;
 const MAX_OPTIONS = 255;
 const WINDOW = 100;
+const OVERLAP = 10;
+const NONE = 0; // the "line" of an unsupported finding, and what a strategy returns when it picks none
+const NONE_OPTION = "No source line supports the reported answer and finding.";
+const NONE_HINT = "Select none if the finding is unsupported.";
 if (!DRY && !KEY.trim()) throw new Error("Set OPENROUTER_API_KEY, or pass --dry");
 
 type Probabilities = Record<string, number>;
@@ -44,6 +51,12 @@ const SMALL: Case[] = [
   { name: "sql", path: "a.py", source: 'def get_user(request, db):\n    user_id = request.args["id"]\n    return db.execute("SELECT * FROM users WHERE id = " + user_id)\n', line: 3, prompt: "Does this code concatenate untrusted input into an SQL query?", value: "TRUE", message: "Use a parameterized SQL query." },
   { name: "unawaited", path: "a.js", source: "async function save(user) {\n  writeAudit(user);\n  await persist(user);\n}\n", line: 2, prompt: "Does this code call writeAudit without awaiting it?", value: "TRUE", message: "Await writeAudit." },
 ];
+// The same findings on code that doesn't have the problem.
+const SMALL_UNSUPPORTED: Case[] = [
+  { name: "none-print", path: "a.py", source: "def greet(name):\n    return name\n", line: NONE, prompt: "Does the code call print?", value: "TRUE", message: "Remove the print call." },
+  { name: "none-sql", path: "a.py", source: 'def get_user(request, db):\n    user_id = request.args["id"]\n    return db.execute("SELECT * FROM users WHERE id = %s", (user_id,))\n', line: NONE, prompt: "Does this code concatenate untrusted input into an SQL query?", value: "TRUE", message: "Use a parameterized SQL query." },
+  { name: "none-unawaited", path: "a.js", source: "async function save(user) {\n  await writeAudit(user);\n  await persist(user);\n}\n", line: NONE, prompt: "Does this code call writeAudit without awaiting it?", value: "TRUE", message: "Await writeAudit." },
+];
 
 // Large files: this repo's own TypeScript, cycled to N lines, with one planted violation.
 const corpus = ["src", "test"].flatMap((dir) => readdirSync(dir).filter((f) => f.endsWith(".ts")).sort()
@@ -52,15 +65,18 @@ const PLANTS = [
   { code: '  const rows = await db.query("SELECT * FROM users WHERE email = \'" + req.query.email + "\'");', prompt: "Does this code concatenate untrusted input into an SQL query?", message: "Use a parameterized SQL query." },
   { code: "  console.log(`login ok for ${user.email} with password ${user.password}`);", prompt: "Does this code log a password or other secret?", message: "Do not log secrets." },
 ];
-function large(size: number, seed: number): Case {
+// Deterministic, spread across the file, never on line 1 and never a round number (unless `at` is given; NONE plants nothing).
+function large(size: number, seed: number, at = Math.max(2, Math.floor(size * [0.37, 0.83, 0.12, 0.61][seed % 4]) + 3), name = `large-${size}-${seed}`): Case {
   const plant = PLANTS[seed % PLANTS.length];
   const lines = Array.from({ length: size }, (_, i) => corpus[(i + seed * 997) % corpus.length]);
-  // Deterministic, spread across the file, never on line 1 and never a round number.
-  const at = Math.max(2, Math.floor(size * [0.37, 0.83, 0.12, 0.61][seed % 4]) + 3);
-  lines[at - 1] = plant.code;
-  return { name: `large-${size}-${seed}`, path: "src/big.ts", source: lines.join("\n") + "\n", line: at, prompt: plant.prompt, value: "TRUE", message: plant.message };
+  if (at !== NONE) lines[at - 1] = plant.code;
+  return { name, path: "src/big.ts", source: lines.join("\n") + "\n", line: at, prompt: plant.prompt, value: "TRUE", message: plant.message };
 }
-const CASES = [...SMALL, ...SIZES.flatMap((size) => [0, 1].map((seed) => large(size, seed)))];
+// Violations on block edges: 100 and 201 sit on ids' edges, 100-110 and 200-210 are lines-windowed's overlaps.
+const EDGES = [[100, 0], [105, 1], [201, 0]].map(([at, seed]) => large(1000, seed, at, `edge-1000-at${at}`));
+const UNSUPPORTED = [...SMALL_UNSUPPORTED, large(250, 1, NONE, "none-250"), large(1000, 0, NONE, "none-1000")];
+const CASES = [...SMALL, ...SIZES.flatMap((size) => [0, 1].map((seed) => large(size, seed))), ...EDGES, ...UNSUPPORTED]
+  .filter((c) => !CASE_PREFIXES.length || CASE_PREFIXES.some((p) => c.name.startsWith(p)));
 
 // ---------- shared ----------
 const sourceLines = (source: string) => source.split("\n").map((raw) => raw.replace(/\r$/, "")).slice(0, source.endsWith("\n") ? -1 : undefined);
@@ -93,12 +109,12 @@ const top = (p: Probabilities = {}) => Object.entries(p).sort((a, b) => b[1] - a
 
 // ---------- strategies ----------
 async function linesStrategy(c: Case): Promise<Outcome> {
-  const options: Record<string, string> = { none: "No source line supports the reported answer and finding." };
+  const options: Record<string, string> = { none: NONE_OPTION };
   sourceLines(c.source).forEach((text, i) => { if (text.trim()) options[`line_${i + 1}`] = `Line ${i + 1}: ${text}`; });
-  const r = await decide({ path: c.path, content: c.source }, { f0: { type: "choice", instructions: instructions(c, ""), criteria: options } });
+  const r = await decide({ path: c.path, content: c.source }, { f0: { type: "choice", instructions: instructions(c, NONE_HINT), criteria: options } });
   const extra = Object.keys(options).length > MAX_OPTIONS ? `${Object.keys(options).length} options > ${MAX_OPTIONS} limit` : undefined;
   const [id, probability] = top(r.answers.f0?.probabilities)[0] ?? [];
-  return { line: id?.startsWith("line_") ? Number(id.slice(5)) : undefined, probability, calls: 1, inputTokens: r.inputTokens, bytes: r.bytes, ms: r.ms, extra };
+  return { line: id === "none" ? NONE : id?.startsWith("line_") ? Number(id.slice(5)) : undefined, probability, calls: 1, inputTokens: r.inputTokens, bytes: r.bytes, ms: r.ms, extra };
 }
 
 async function digitsStrategy(c: Case, mode: "greedy" | "constrained"): Promise<Outcome> {
@@ -141,22 +157,22 @@ async function idsStrategy(c: Case): Promise<Outcome> {
   const content = lines.map((text, i) => `${id(i + 1)}| ${text}`).join("\n");
   const state = { path: c.path, content };
   const real = lines.flatMap((text, i) => text.trim() ? [i + 1] : []);
-  const ask = (candidates: number[], tail = "") => decide(state, { f0: {
-    type: "choice",
-    instructions: instructions(c, `Every line in content starts with its id and "| ". Answer with that line's id.${tail}`),
-    criteria: Object.fromEntries(candidates.map((n) => [id(n), null])),
-  } });
+  // With none, up to 254 lines fit one question's 255 options.
   if (real.length < MAX_OPTIONS) {
-    const r = await ask(real);
+    const r = await decide(state, { f0: {
+      type: "choice",
+      instructions: instructions(c, `Every line in content starts with its id and "| ". Answer with that line's id. ${NONE_HINT}`),
+      criteria: { none: NONE_OPTION, ...Object.fromEntries(real.map((n) => [id(n), null])) },
+    } });
     const [pick, probability] = top(r.answers.f0?.probabilities)[0] ?? [];
-    return { line: pick ? Number(pick.slice(1)) : undefined, probability, calls: 1, inputTokens: r.inputTokens, bytes: r.bytes, ms: r.ms };
+    return { line: pick === "none" ? NONE : pick ? Number(pick.slice(1)) : undefined, probability, calls: 1, inputTokens: r.inputTokens, bytes: r.bytes, ms: r.ms };
   }
-  // One request, fanned out: a window question plus one id question per window (state sent once).
+  // One request, fanned out: a window question (with none) plus one id question per window (state sent once).
   const windows = Array.from({ length: Math.ceil(lines.length / WINDOW) }, (_, w) => [w * WINDOW + 1, Math.min(lines.length, (w + 1) * WINDOW)]);
   const questions: Record<string, object> = { window: {
     type: "choice",
-    instructions: instructions(c, "Every line in content starts with its id. Which range of line ids contains that line?"),
-    criteria: Object.fromEntries(windows.map(([a, b], w) => [`W${w}`, `lines ${id(a)} to ${id(b)}`])),
+    instructions: instructions(c, `Every line in content starts with its id. Which range of line ids contains that line? ${NONE_HINT}`),
+    criteria: { none: NONE_OPTION, ...Object.fromEntries(windows.map(([a, b], w) => [`W${w}`, `lines ${id(a)} to ${id(b)}`])) },
   } };
   windows.forEach(([a, b], w) => {
     const ids = real.filter((n) => n >= a && n <= b);
@@ -166,12 +182,40 @@ async function idsStrategy(c: Case): Promise<Outcome> {
   const base = { calls: 1, inputTokens: r.inputTokens, bytes: r.bytes, ms: r.ms };
   if (DRY) return { ...base, extra: `${Object.keys(questions).length} questions` };
   const [w, pw] = top(r.answers.window?.probabilities)[0] ?? [];
+  if (w === "none") return { ...base, line: NONE, probability: pw, extra: `window none@${(pw ?? 0).toFixed(2)}` };
   const [pick, pl] = top(r.answers[`w${w?.slice(1)}`]?.probabilities)[0] ?? [];
   return { ...base, line: pick ? Number(pick.slice(1)) : undefined, probability: (pw ?? 0) * (pl ?? 0), extra: `window ${w}@${(pw ?? 0).toFixed(2)} line@${(pl ?? 0).toFixed(2)}` };
 }
 
+// lines, past the option limit: line-text options in overlapping blocks (1-110, 100-210, 200-310, ...), one request.
+async function linesWindowedStrategy(c: Case): Promise<Outcome> {
+  const lines = sourceLines(c.source);
+  const real = lines.flatMap((text, i) => (text.trim() ? [i + 1] : []));
+  if (real.length < MAX_OPTIONS) return linesStrategy(c);
+  const width = String(lines.length).length;
+  const content = lines.map((text, i) => `${String(i + 1).padStart(width, "0")}| ${text}`).join("\n");
+  const windows = Array.from({ length: Math.ceil(lines.length / WINDOW) }, (_, w) => [Math.max(1, w * WINDOW), Math.min(lines.length, (w + 1) * WINDOW + OVERLAP)]);
+  const questions: Record<string, object> = { window: {
+    type: "choice",
+    instructions: instructions(c, `Every line in content starts with its line number and "| ". Which range of line numbers contains that line? Ranges overlap; any range containing it is right. ${NONE_HINT}`),
+    criteria: { none: NONE_OPTION, ...Object.fromEntries(windows.map(([a, b], w) => [`W${w}`, `lines ${a} to ${b}`])) },
+  } };
+  windows.forEach(([a, b], w) => {
+    const ids = real.filter((n) => n >= a && n <= b);
+    if (ids.length) questions[`w${w}`] = { type: "choice", instructions: instructions(c, `Every line in content starts with its line number and "| ". The line is between ${a} and ${b}.`), criteria: Object.fromEntries(ids.map((n) => [`line_${n}`, `Line ${n}: ${lines[n - 1]}`])) };
+  });
+  const r = await decide({ path: c.path, content }, questions);
+  const base = { calls: 1, inputTokens: r.inputTokens, bytes: r.bytes, ms: r.ms };
+  if (DRY) return { ...base, extra: `${Object.keys(questions).length} questions` };
+  const [w, pw] = top(r.answers.window?.probabilities)[0] ?? [];
+  if (w === "none") return { ...base, line: NONE, probability: pw, extra: `window none@${(pw ?? 0).toFixed(2)}` };
+  const [pick, pl] = top(r.answers[`w${w?.slice(1)}`]?.probabilities)[0] ?? [];
+  return { ...base, line: pick ? Number(pick.slice(5)) : undefined, probability: (pw ?? 0) * (pl ?? 0), extra: `window ${w}@${(pw ?? 0).toFixed(2)} line@${(pl ?? 0).toFixed(2)}` };
+}
+
 const STRATEGIES: Record<string, (c: Case) => Promise<Outcome>> = {
   lines: linesStrategy,
+  "lines-windowed": linesWindowedStrategy,
   "digits-greedy": (c) => digitsStrategy(c, "greedy"),
   "digits-constrained": (c) => digitsStrategy(c, "constrained"),
   ids: idsStrategy,
@@ -191,25 +235,28 @@ for (const c of CASES) {
       try { o = await run(c); } catch (error) { o = { error: (error as Error).message, calls: 1, inputTokens: 0, bytes: 0, ms: 0 }; }
       rows.push({ strategy: name, case: c.name, run: i, truth: c.line, o });
       const verdict = DRY ? "" : o.error ? `ERROR ${o.error}` : o.line === c.line ? "HIT " : "MISS";
-      out([name.padEnd(19), c.name.padEnd(16), `#${i}`, verdict, DRY ? "" : `got=${o.line ?? "-"} want=${c.line} p=${o.probability?.toFixed(3) ?? "-"}`,
+      const shown = (line?: number) => line === NONE ? "none" : line ?? "-";
+      out([name.padEnd(19), c.name.padEnd(16), `#${i}`, verdict, DRY ? "" : `got=${shown(o.line)} want=${shown(c.line)} p=${o.probability?.toFixed(3) ?? "-"}`,
         `bytes=${o.bytes}`, o.inputTokens ? `tok=${o.inputTokens}` : "", DRY ? "" : `ms=${Math.round(o.ms)}`, o.extra ?? ""].filter(Boolean).join("  "));
     }
   }
 }
 
 if (!DRY) {
-  out("\nsummary (hit = exact line; cited = hit AND p >= threshold; stable = same answer across repeats)");
+  out("\nsummary (hit = exact line, or none when unsupported; cited = hit AND p >= threshold; confidently-wrong = a wrong line at p >= threshold; stable = same answer across repeats)");
   for (const strategy of Object.keys(STRATEGIES).filter((s) => ONLY.some((o) => s.startsWith(o)))) {
     const mine = rows.filter((r) => r.strategy === strategy);
     const hits = mine.filter((r) => r.o.line === r.truth).length;
     const cited = mine.filter((r) => r.o.line === r.truth && (r.o.probability ?? 0) >= THRESHOLD).length;
-    const wrongCited = mine.filter((r) => r.o.line !== undefined && r.o.line !== r.truth && (r.o.probability ?? 0) >= THRESHOLD).length;
+    const wrongCited = mine.filter((r) => r.o.line !== undefined && r.o.line !== NONE && r.o.line !== r.truth && (r.o.probability ?? 0) >= THRESHOLD).length;
+    const unsupported = mine.filter((r) => r.truth === NONE);
+    const declined = unsupported.filter((r) => r.o.line === NONE).length;
     const errors = mine.filter((r) => r.o.error).length;
     const byCase = new Map<string, Set<string>>();
     for (const r of mine) byCase.set(r.case, (byCase.get(r.case) ?? new Set()).add(String(r.o.line)));
     const stable = [...byCase.values()].filter((s) => s.size === 1).length;
     const tokens = mine.reduce((sum, r) => sum + r.o.inputTokens, 0);
-    out(`${strategy.padEnd(19)} hit ${hits}/${mine.length}  cited@${THRESHOLD} ${cited}  confidently-wrong ${wrongCited}  errors ${errors}  stable ${stable}/${byCase.size}  input tokens ${tokens.toLocaleString("en-US")}`);
+    out(`${strategy.padEnd(19)} hit ${hits}/${mine.length}  cited@${THRESHOLD} ${cited}  confidently-wrong ${wrongCited}${unsupported.length ? `  unsupported→none ${declined}/${unsupported.length}` : ""}  errors ${errors}  stable ${stable}/${byCase.size}  input tokens ${tokens.toLocaleString("en-US")}`);
   }
 }
 if (process.env.GITHUB_STEP_SUMMARY) {
