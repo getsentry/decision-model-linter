@@ -6,6 +6,14 @@ export const DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
 
 const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 
+// Reports land in pull request comments and job summaries, which can be public. A rejected key's
+// response names the OpenRouter workspace and key, so these statuses never repeat the body.
+const ACCOUNT_ERRORS: Record<number, string> = {
+  401: "OpenRouter rejected the API key",
+  402: "the OpenRouter account is out of credits",
+  403: "OpenRouter refused the API key, such as for a spent key limit",
+};
+
 /** A decision model served by OpenRouter's decisions API. */
 export function openRouter(options: {
   name: string;
@@ -74,8 +82,11 @@ async function post(url: string, apiKey: string, body: string, timeoutMs: number
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (response.ok) return await response.json();
-      const detail = (await response.text()).slice(0, 500);
-      failure = new ModelError(`HTTP ${response.status}: ${detail}`, detail.includes("max_tokens_exceeded"));
+      const detail = await response.text();
+      failure = new ModelError(
+        `HTTP ${response.status}: ${describeFailure(response.status, detail)}`,
+        detail.includes("max_tokens_exceeded"),
+      );
       if (!RETRY_STATUSES.has(response.status)) throw failure;
     } catch (error) {
       if (error instanceof ModelError) throw error;
@@ -84,4 +95,9 @@ async function post(url: string, apiKey: string, body: string, timeoutMs: number
     if (attempt >= retries) throw failure;
     await new Promise((done) => setTimeout(done, 2000 * 2 ** attempt));
   }
+}
+
+/** What a failed response says: a fixed message for an account error, else the body without links. */
+function describeFailure(status: number, detail: string): string {
+  return ACCOUNT_ERRORS[status] ?? detail.replace(/https?:\/\/\S+/g, "<link removed>").slice(0, 500);
 }

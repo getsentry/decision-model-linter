@@ -80,3 +80,29 @@ test("a missing answer is an error", async () => {
     /no answer for: f/,
   );
 });
+
+test("an account error does not repeat the response, which names the workspace and key", async () => {
+  const sent = stubFetch(
+    () =>
+      new Response(
+        '{"error":{"message":"Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/some-workspace/keys/abc123","code":403}}',
+        { status: 403 },
+      ),
+  );
+  await assert.rejects(
+    openRouter({ name: "test-model", apiKey: "test" }).decide({}, { f: { type: "yesno", instructions: "Q?" } }),
+    (error: unknown) =>
+      error instanceof ModelError &&
+      error.message === "HTTP 403: OpenRouter refused the API key, such as for a spent key limit" &&
+      !error.tooLarge,
+  );
+  assert.equal(sent.length, 1);
+});
+
+test("links are removed from other errors", async () => {
+  stubFetch(() => new Response('{"error":{"message":"Bad request, see https://openrouter.ai/docs/x"}}', { status: 400 }));
+  await assert.rejects(
+    openRouter({ name: "test-model", apiKey: "test" }).decide({}, { f: { type: "yesno", instructions: "Q?" } }),
+    (error: unknown) => error instanceof ModelError && /see <link removed>/.test(error.message) && !/openrouter\.ai/.test(error.message),
+  );
+});
