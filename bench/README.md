@@ -1,5 +1,7 @@
 # Citation strategies
 
+[Recorded live comparison](results/combined-executable-v1.md) includes the paired results and raw trial data.
+
 Run a controlled comparison of two HTTP requests against one combined request:
 
 ```sh
