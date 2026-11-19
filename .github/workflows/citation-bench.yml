@@ -4,7 +4,7 @@ name: Citation strategy bench
 # Reads the DECISION_MODEL_LINTER_OPENROUTER_API_KEY secret, as getsentry/sentry and getsentry/seer do; results land in the job summary.
 on:
   pull_request:
-    paths: ['bench/**', '.github/workflows/citation-bench.yml']
+    paths: ['bench/**', 'test/citation-bench.test.ts', '.github/workflows/citation-bench.yml']
   workflow_dispatch:
 
 permissions:
@@ -24,8 +24,23 @@ jobs:
         with:
           node-version: '24'
 
-      - run: node bench/citation-strategies.ts --dry
+      - run: node bench/citation-strategies.ts --dry --only two-pass,combined --output citation-dry.json
 
-      - run: node bench/citation-strategies.ts --repeats 3
+      - name: Compare detection and citation end to end
+        shell: bash
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo 'Set the DECISION_MODEL_LINTER_OPENROUTER_API_KEY repository secret to run the live comparison.' | tee citation-results.txt
+            exit 1
+          fi
+          node bench/citation-strategies.ts --only two-pass,combined --repeats 5 --output citation-results.json | tee citation-results.txt
         env:
           OPENROUTER_API_KEY: ${{ secrets.DECISION_MODEL_LINTER_OPENROUTER_API_KEY }}
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: citation-strategies
+          path: |
+            citation-*.json
+            citation-*.txt
