@@ -82,6 +82,11 @@ test("github annotations escape workflow-command characters", () => {
   );
 });
 
+test("github annotations preserve whitespace in source paths", () => {
+  const output = format([call(" wrong  target\t\r\n.py ", [{ locations: [{ line: 1, endLine: 1, col: 1, endColumn: 9 }] }])], "github");
+  assert.match(output, /^::warning file= wrong  target\t%0D%0A.py ,line=1,endLine=1,col=1,endColumn=9,/);
+});
+
 test("json names the provider and model, and every rule's probabilities", () => {
   const result = { ...call("a.py", []), answers: { createsNewApiEndpoint: { TRUE: 0.2, FALSE: 0.8 } }, model: "test-model-2026" };
   const [parsed] = JSON.parse(format([result], "json"));
