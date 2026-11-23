@@ -6,7 +6,7 @@ export type State = Record<string, string>;
 
 export type Question =
   | { type: "yesno"; instructions: string; criteria?: { yes: string; no: string } }
-  | { type: "choice"; instructions: string; options: Record<string, string> };
+  | { type: "choice"; instructions: string; options: Record<string, string | null> };
 
 export type Answer =
   | { type: "yesno"; yes: number }

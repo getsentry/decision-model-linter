@@ -81,7 +81,50 @@ If the repository's `package.json` has no `"type": "module"`, keep the config in
 npm install --save-dev @sentry/decision-model-linter
 ```
 
+## Source citations
+
+By default, a second decision pass attaches a source line to each finding using
+the model configured for that lint decision, with a line probability threshold
+of 0.7. Configure `citation` to override the threshold:
+
+```ts
+export default {
+  model: jev,
+  citation: { threshold: 0.7 },
+  suites: { security },
+} satisfies Config;
+```
+
+Set `citation: false` on the root config to disable the second pass. Omitting
+`citation` or setting it to `{}` uses the default line probability threshold of
+0.7. The citation threshold is independent of the rule's decision threshold.
+Citations use the decision call's resolved model, API key, endpoint, and input budget.
+Each flagged decision call batches its findings into one citation request. The
+model selects one representative source line per finding, or no evidence, using
+the source, rule questions, and reported answers.
+
+The citation request tags source lines with IDs and offers those IDs as choices.
+Up to 254 eligible lines fit alongside `none` in one question. Larger candidate
+sets use a range question and line questions for nonempty 100-line ranges,
+all in the same request. A range with one eligible line resolves directly.
+The citation threshold applies to the product of the
+selected range and line probabilities. More than 254 nonempty ranges retain
+file-level findings because the range question would exceed the API option limit.
+
+Selected lines become `locations` in JSON output and whole-line annotations with
+`--format github`. In changeset mode, only changed, nonblank lines can be selected.
+Failed, uncertain, or unsupported citations leave the original file-level finding,
+severity, and exit status intact. Inputs exceeding `maxInputTokens` are
+skipped rather than truncated; requests time out after 30 seconds without retries.
+Citation calls and input tokens are reported separately; the displayed decision
+cost excludes citation charges.
+
 ## In GitHub Actions
+
+For file annotations instead of a bot comment, run
+`npx decision-model-linter --base HEAD^1 --format github` with stdout connected to
+the runner and omit the comment-posting steps below. Workflow-command annotations
+need no pull-request write permission.
 
 The CLI knows nothing about pull requests: it lints a changeset or files, prints a report, and exits 0 when nothing fails, 1 when an error is found, or 2 when it could not finish. The workflow owns the pull request: the comment, and a label that lets a person accept a failure.
 
@@ -193,6 +236,13 @@ npm ci
 npm run typecheck
 npm test
 npm run build
+```
+
+To check source citations against live Jev requests using synthetic fixtures:
+
+```sh
+npm run build
+OPENROUTER_API_KEY=... node test/citation.live.ts
 ```
 
 The package ships compiled JavaScript, because Node does not run TypeScript from `node_modules`. To release, run the Release workflow with a version; craft prepares the release and publishes the tarball that CI built once the release is approved in `getsentry/publish`.

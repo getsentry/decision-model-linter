@@ -55,6 +55,7 @@ export async function tree(files: Record<string, string>): Promise<string> {
 /** Config source whose one suite, `api`, has one rule `f` on Python files with these values. */
 export function configSource(values = `[{ value: "TRUE", severity: "error", report: "Fix." }, { value: "FALSE" }]`): string {
   return `export default {
+  citation: false,
   model: { provider: "openrouter", name: "test-model", apiKey: "test", maxInputTokens: 32768 },
   suites: { api: { files: ["*.py"], rules: { f: { prompt: "Q?", values: ${values} } } } },
 };
