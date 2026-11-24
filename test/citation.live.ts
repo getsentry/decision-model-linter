@@ -50,19 +50,20 @@ for (const fixture of cases) {
     assert.equal(run.error, undefined, fixture.name);
     assert.equal(run.stderr, "", fixture.name);
     const results = JSON.parse(run.stdout);
-    const findings = results.flatMap((call: { findings: unknown[] }) => call.findings);
+    assert.equal(results.length, 1, fixture.name);
+    const [result] = results;
+    assert.equal(result.unchecked, undefined, fixture.name);
+    assert.equal(result.citation?.error, undefined, fixture.name);
+    const findings = result.findings;
     assert.equal(run.status, fixture.line === undefined ? 0 : 1, fixture.name);
     if (fixture.citation === false) {
       assert.equal(findings.length, 1, fixture.name);
       assert.equal(findings[0].locations, undefined);
-      assert.ok(results.every((call: { citation?: unknown }) => call.citation === undefined));
     } else if (fixture.line === undefined) {
       assert.deepEqual(findings, []);
-      assert.ok(results.every((call: { citation?: unknown }) => call.citation === undefined));
     } else {
       assert.equal(findings.length, 1, fixture.name);
       assert.equal(findings[0].locations?.[0]?.line, fixture.line, `${fixture.name}: citation should identify the offending line`);
-      assert.equal(results[0].unchecked, undefined, fixture.name);
     }
     console.log(`PASS ${fixture.name}${fixture.citation === false ? " retains file-level finding" : fixture.line === undefined ? " has no findings" : ` cites line ${fixture.line}`}`);
   } finally {

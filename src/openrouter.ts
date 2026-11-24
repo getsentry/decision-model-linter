@@ -32,12 +32,14 @@ export function openRouter(options: {
       const durationMs = performance.now() - started;
 
       const raw = payload.answers ?? {};
-      const answers: Record<string, Answer> = {};
-      for (const [id, question] of Object.entries(questions)) {
+      const answers = Object.fromEntries(Object.entries(questions).flatMap(([id, question]) => {
         const answer = fromApi(question, raw[id]);
-        if (!answer) throw new ModelError(`no answer for: ${id}`);
-        answers[id] = answer;
-      }
+        if (!answer) {
+          if (question.type === "choice" && question.optional) return [];
+          throw new ModelError(`no answer for: ${id}`);
+        }
+        return [[id, answer]];
+      }));
       return {
         answers,
         inputTokens: payload.usage?.input_tokens,
