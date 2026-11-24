@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { type ContextValue, type Citation, type Model, type ResolvedRule, type Severity, DEFAULT_SEVERITY } from "./config.ts";
 import { collapseHiddenLines, linesToShow } from "./changed-lines.ts";
-import { citeFindings, type CitationResult } from "./citation.ts";
+import { planCitations } from "./citation.ts";
 import { isIgnored, matchesAny } from "./files.ts";
 import { type Answer, type DecisionModel, type Question, type State, ModelError } from "./models.ts";
 
@@ -44,8 +44,8 @@ export interface Finding {
 }
 
 export interface CallResult {
-  /** Optional citation pass; failure never removes or changes a decision finding. */
-  citation?: CitationResult;
+  /** Why a finding could only be reported at file level. */
+  citation?: { error: string };
   suite: string;
   path: string;
   /** The rules asked in this call. */
@@ -56,7 +56,7 @@ export interface CallResult {
   answers: Record<string, Record<string, number>>;
   findings: Finding[];
   truncated: boolean;
-  /** The provider rejected the first state as too large and a half-budget state was sent. */
+  /** A provider size rejection caused a retry with a smaller source view. */
   shrunk: boolean;
   error?: string;
   /** Set when the file was not fully checked: the most severe `unchecked` among the call's rules. */
@@ -235,18 +235,28 @@ async function ask(
     Object.entries(context).reduce((sum, [key, text]) => sum + key.length + text.length, 0) +
     Object.entries(questions).reduce((sum, [id, q]) => sum + id.length + JSON.stringify(q).length, 0) +
     QUESTION_OVERHEAD_CHARS * rules.length;
-  const budget = Math.max(rules[0].model.maxInputTokens * CHARS_PER_TOKEN - fixedChars, 0);
+  const requestBudget = rules[0].model.maxInputTokens * CHARS_PER_TOKEN;
+  const budget = Math.max(requestBudget - fixedChars, 0);
 
   // A changed file shows only its new lines and the brackets they continue, never the code around
   // them: the model answers about everything it is shown, so unchanged code would leak into the answer.
   const annotated = annotate(content, changed);
   const lines = changed ? collapseHiddenLines(annotated, linesToShow(content, changed, path)) : annotated;
-  for (const attemptBudget of [budget, Math.floor(budget / 2)]) {
-    const fitted = fit(lines, attemptBudget);
-    result.truncated = fitted.length < lines.reduce((sum, line) => sum + line.length + 1, 0);
-    const state: State = { path, content: fitted, ...context };
+  let rejectedContent: string | undefined;
+  let providerLimit: { error: string } | undefined;
+  let divisor = 1;
+  for (;;) {
+    const fitted = fit(lines, Math.floor(budget / divisor));
+    result.truncated = fitted.truncated;
+    result.shrunk = rejectedContent !== undefined && fitted.content !== rejectedContent;
+    const state: State = { path, content: fitted.content, ...context };
+    const plan = providerLimit ?? (citation && planCitations({
+      rules, completeLines: fitted.completeLines, lineCount: annotated.length, changeset: changed !== undefined, config: citation,
+      budget: Math.floor(requestBudget / divisor) - JSON.stringify(state).length - JSON.stringify(questions).length - 512,
+    }));
     try {
-      const decision = await client.decide(state, questions);
+      const asked = plan && "questions" in plan ? { ...questions, ...plan.questions } : questions;
+      const decision = await client.decide(state, asked);
       Object.assign(result, {
         model: decision.model ?? rules[0].model.name,
         inputTokens: decision.inputTokens,
@@ -254,20 +264,23 @@ async function ask(
         cost: decision.cost,
         durationMs: decision.durationMs,
       });
-      for (const rule of rules) {
-        result.answers[rule.name] = probabilities(rule, decision.answers[rule.name]);
-        result.findings.push(...findings(rule, path, result.answers[rule.name]));
-      }
-      if (citation && result.findings.length) {
-        result.citation = await citeFindings({ ...state, content }, result.findings, rules, changed, citation);
+      result.answers = Object.fromEntries(rules.map((rule) => [rule.name, probabilities(rule, decision.answers[rule.name])]));
+      result.findings = rules.flatMap((rule) => findings(rule, path, result.answers[rule.name]));
+      if (plan && result.findings.length) {
+        if ("error" in plan) result.citation = { error: plan.error };
+        else plan.attach(result.findings, decision.answers);
       }
       return;
     } catch (error) {
-      if (error instanceof ModelError && error.tooLarge && !result.shrunk) {
-        result.shrunk = true;
+      if (!(error instanceof ModelError && error.tooLarge)) throw error;
+      if (plan && "questions" in plan) {
+        // The source may still fit without the speculative questions. Keep its tail for detection.
+        providerLimit = { error: "provider rejected the citation input size; retaining file-level findings" };
         continue;
       }
-      throw error;
+      if (divisor === 2) throw error;
+      rejectedContent = fitted.content;
+      divisor = 2;
     }
   }
 }
@@ -322,7 +335,8 @@ function toQuestion(rule: ResolvedRule, mode: CallResult["mode"]): Question {
 }
 
 /** Each of the rule's answers with the probability the model gave it. */
-function probabilities(rule: ResolvedRule, answer: Answer): Record<string, number> {
+function probabilities(rule: ResolvedRule, answer: Answer | undefined): Record<string, number> {
+  if (!answer) throw new ModelError(`no answer for: ${rule.name}`);
   if (answer.type === "yesno") return { TRUE: answer.yes, FALSE: 1 - answer.yes };
   return Object.fromEntries(rule.values.map((v) => [v.value, answer.probabilities[v.value] ?? 0]));
 }
@@ -355,17 +369,21 @@ export function annotate(content: string, newLines?: ReadonlySet<number>): strin
   return lines.map((line, i) => `${i + 1}${newLines?.has(i + 1) ? "(new)" : ""}\t${line}`);
 }
 
-/** The lines within `budget` characters, cutting the end if they do not fit. */
-function fit(lines: readonly string[], budget: number): string {
-  const whole = lines.length ? `${lines.join("\n")}\n` : "";
-  return truncate(whole, budget);
-}
+/** Fits the detection view first. Only complete lines in that view are eligible for citations. */
+function fit(lines: readonly string[], budget: number) {
+  const length = lines.reduce((sum, line) => sum + line.length + 1, 0);
+  // The last newline may sit exactly at the cutoff. All source text still fits.
+  if (length <= budget + 1) {
+    return { content: lines.length ? `${lines.join("\n")}\n` : "", completeLines: lines, truncated: false };
+  }
 
-/** `text` cut at a line boundary to fit `budget` characters, with a marker saying how much was cut. */
-function truncate(text: string, budget: number): string {
-  if (text.length <= budget) return text;
-  budget = Math.max(budget, 0);
-  const cut = text.lastIndexOf("\n", budget);
-  const kept = cut > 0 ? text.slice(0, cut + 1) : `${text.slice(0, budget)}\n`;
-  return `${kept}[decision-model-linter: truncated, ${text.length - kept.length} of ${text.length} characters omitted]\n`;
+  let count = 0;
+  let size = 0;
+  while (count < lines.length && size + lines[count].length <= budget) {
+    size += lines[count++].length + 1;
+  }
+  const completeLines = lines.slice(0, count);
+  const kept = `${count ? completeLines.join("\n") : lines[0].slice(0, budget)}\n`;
+  const content = `${kept}[decision-model-linter: truncated, ${length - kept.length} of ${length} characters omitted]\n`;
+  return { content, completeLines, truncated: true };
 }

@@ -83,9 +83,10 @@ npm install --save-dev @sentry/decision-model-linter
 
 ## Source citations
 
-By default, a second decision pass attaches a source line to each finding using
-the model configured for that lint decision, with a line probability threshold
-of 0.7. Configure `citation` to override the threshold:
+By default, each lint request also asks for a source line supporting each rule
+value that can produce a finding. Only values that reach their rule threshold
+can produce an annotation. The default line probability threshold is 0.7.
+Set `citation.threshold` to override it.
 
 ```ts
 export default {
@@ -95,17 +96,12 @@ export default {
 } satisfies Config;
 ```
 
-Set `citation: false` on the root config to disable the second pass. Omitting
-`citation` or setting it to `{}` uses the default line probability threshold of
-0.7. The citation threshold is independent of the rule's decision threshold.
-Citations use the decision call's resolved model, API key, endpoint, and input budget.
-Each flagged decision call batches its findings into one citation request. The
-model selects one representative source line per finding, or no evidence, using
-the source, rule questions, and reported answers.
-
-The citation request tags source lines with IDs and offers those IDs as choices.
-Up to 254 eligible lines fit alongside `none` in one question. Larger candidate
-sets use a range question and line questions for nonempty 100-line ranges,
+Set `citation: false` on the root config to disable citation questions. Omitting
+`citation` or setting it to `{}` uses the default threshold. Both kinds of
+question read the same numbered source lines, file path, and resolved context.
+The model can select one representative line or `none` for each reportable
+value. Up to 254 eligible lines fit alongside `none` in one question. Larger
+candidate sets use a range question and line questions for nonempty 100-line ranges,
 all in the same request. A range with one eligible line resolves directly.
 The citation threshold applies to the product of the
 selected range and line probabilities. More than 254 nonempty ranges retain
@@ -113,11 +109,17 @@ file-level findings because the range question would exceed the API option limit
 
 Selected lines become `locations` in JSON output and whole-line annotations with
 `--format github`. In changeset mode, only changed, nonblank lines can be selected.
-Failed, uncertain, or unsupported citations leave the original file-level finding,
-severity, and exit status intact. Inputs exceeding `maxInputTokens` are
-skipped rather than truncated; requests time out after 30 seconds without retries.
-Citation calls and input tokens are reported separately; the displayed decision
-cost excludes citation charges.
+Missing, uncertain, or unsupported citation answers leave the finding at file
+level with its original severity. The linter fits the source for the lint
+questions first. If the citation questions exceed the remaining input budget,
+it sends the fitted source with just the lint questions. If the provider rejects
+a combined request as too large, the linter retries the same source with just
+the lint questions before reducing the source budget.
+
+The usage summary and each JSON result's `inputTokens`, `outputTokens`, and
+`cost` include citation work. The former `citation.calls`,
+`citation.inputTokens`, and `citation.outputTokens` fields have been removed.
+A skipped citation can still have a `citation.error` diagnostic.
 
 ## In GitHub Actions
 

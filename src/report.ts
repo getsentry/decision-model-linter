@@ -45,17 +45,6 @@ export function describeUsage(u: Usage): string {
   return parts.join(", ");
 }
 
-/** Decision usage and separately accounted optional citation calls. */
-function describeRunUsage(results: readonly CallResult[]): string {
-  const passes = results.flatMap((call) => call.citation ? [call.citation] : []);
-  const calls = passes.reduce((sum, pass) => sum + pass.calls, 0);
-  const tokens = passes.reduce((sum, pass) => sum + (pass.inputTokens ?? 0), 0);
-  const missing = passes.filter((pass) => pass.calls && pass.inputTokens === undefined).length;
-  return describeUsage(usage(results)) + (passes.length
-    ? `; citation: ${calls} calls, ${tokens.toLocaleString("en-US")} input tokens${missing ? ` (usage missing for ${missing})` : ""}`
-    : "");
-}
-
 /** The run's results in one output format. */
 export function format(results: readonly CallResult[], kind: Format): string {
   if (kind === "json") return `${JSON.stringify(results, null, 2)}\n`;
@@ -85,7 +74,7 @@ function stylish(results: readonly CallResult[]): string {
       `✖ ${total} ${total === 1 ? "problem" : "problems"} (${plural(counts.error, "error")}, ${plural(counts.warn, "warning")})`,
     );
   }
-  lines.push(`decision-model-linter: ${describeRunUsage(results)}`);
+  lines.push(`decision-model-linter: ${describeUsage(usage(results))}`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -106,7 +95,7 @@ function github(results: readonly CallResult[]): string {
   for (const call of results) {
     if (call.citation?.error) lines.push(`::notice file=${property(call.path)},title=decision-model-linter citation::${data(call.citation.error)}`);
   }
-  lines.push(`::notice title=${property("decision-model-linter usage")}::${data(describeRunUsage(results))}`);
+  lines.push(`::notice title=${property("decision-model-linter usage")}::${data(describeUsage(usage(results)))}`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -147,7 +136,7 @@ function gap(call: CallResult): string {
 
 /** The report's last line: what this run cost. */
 function footer(results: readonly CallResult[]): string {
-  return `<sub>decision-model-linter: ${describeRunUsage(results)}</sub>\n`;
+  return `<sub>decision-model-linter: ${describeUsage(usage(results))}</sub>\n`;
 }
 
 /** 1 if any finding or unchecked file is at `error`, else 0. */

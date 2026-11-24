@@ -6,14 +6,14 @@ export type State = Record<string, string>;
 
 export type Question =
   | { type: "yesno"; instructions: string; criteria?: { yes: string; no: string } }
-  | { type: "choice"; instructions: string; options: Record<string, string | null> };
+  | { type: "choice"; instructions: string; options: Record<string, string | null>; optional?: true };
 
 export type Answer =
   | { type: "yesno"; yes: number }
   | { type: "choice"; probabilities: Record<string, number> };
 
 export interface Decision {
-  answers: Record<string, Answer>;
+  answers: Record<string, Answer | undefined>;
   inputTokens?: number;
   outputTokens?: number;
   /** USD, as the provider reports it. */
